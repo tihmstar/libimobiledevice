@@ -29,11 +29,18 @@
 #include <stdlib.h>
 #include <getopt.h>
 #include "common/userpref.h"
+#include "common/utils.h"
 
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/lockdown.h>
 
 static char *udid = NULL;
+typedef enum {
+       WIFI_SHOW,
+       WIFI_ENABLE,
+       WIFI_DISABLE
+} t_wifi;
+
 
 static void print_error_message(lockdownd_error_t err)
 {
@@ -69,9 +76,10 @@ static void print_usage(int argc, char **argv)
 	printf("  pair         pair device with this host\n");
 	printf("  validate     validate if device is paired with this host\n");
 	printf("  unpair       unpair device with this host\n");
-	printf("  list         list devices paired with this host\n\n");
+  printf("  list         list devices paired with this host\n");
+  printf("  wifi <on/off>    enable/disable wifi connections\n\n");
 	printf(" The following OPTIONS are accepted:\n");
-	printf("  -d, --debug      enable communication debugging\n");
+  printf("  -d, --debug      enable communication debugging\n");
 	printf("  -u, --udid UDID  target specific device by its 40-digit device UDID\n");
 	printf("  -h, --help       prints usage information\n");
 	printf("\n");
@@ -128,9 +136,10 @@ int main(int argc, char **argv)
 
 	char *type = NULL;
 	char *cmd;
-	typedef enum {
-		OP_NONE = 0, OP_PAIR, OP_VALIDATE, OP_UNPAIR, OP_LIST, OP_HOSTID, OP_SYSTEMBUID
-	} op_t;
+  t_wifi wifiopt = WIFI_SHOW;
+  typedef enum {
+		OP_NONE = 0, OP_PAIR, OP_VALIDATE, OP_UNPAIR, OP_LIST, OP_HOSTID, OP_SYSTEMBUID, OP_WIFI
+  } op_t;
 	op_t op = OP_NONE;
 
 	parse_opts(argc, argv);
@@ -155,7 +164,22 @@ int main(int argc, char **argv)
 		op = OP_HOSTID;
 	} else if (!strcmp(cmd, "systembuid")) {
 		op = OP_SYSTEMBUID;
-	} else {
+	} else if (!strcmp(cmd, "wifi")) {
+		op = OP_WIFI;
+		if ((argc - optind) < 2) {
+			wifiopt = WIFI_SHOW;
+		}else{
+			if (!strcmp((argv+optind+1)[0], "on")) {
+				wifiopt = WIFI_ENABLE;
+			}else if (!strcmp((argv+optind+1)[0], "off")){
+				wifiopt = WIFI_DISABLE;
+			}else{
+				printf("ERROR: Invalid wifi command option '%s' specified\n", (argv+optind+1)[0]);
+				print_usage(argc, argv);
+				exit(EXIT_FAILURE);
+			}
+		}
+	}else {
 		printf("ERROR: Invalid command '%s' specified\n", cmd);
 		print_usage(argc, argv);
 		exit(EXIT_FAILURE);
@@ -284,6 +308,35 @@ int main(int argc, char **argv)
 			print_error_message(lerr);
 		}
 		break;
+		case OP_WIFI:
+		{
+			lockdownd_client_free(client);
+			client = NULL;
+			lerr = lockdownd_client_new_with_handshake(device, &client, "idevicepair");
+			if (wifiopt == WIFI_SHOW) {
+				plist_t node;
+				if((lerr = lockdownd_get_value(client, "com.apple.mobile.wireless_lockdown", "EnableWifiConnections", &node)) == LOCKDOWN_E_SUCCESS) {
+					if (node) {
+						printf("EnableWifiConnections: ");
+						plist_print_to_stream(node, stdout);
+						plist_free(node);
+						node = NULL;
+					}
+				}else {
+					result = EXIT_FAILURE;
+					print_error_message(lerr);
+				}
+			}else{
+				lerr = lockdownd_set_value(client, "com.apple.mobile.wireless_lockdown", "EnableWifiConnections", plist_new_bool(wifiopt == WIFI_ENABLE));
+				if (lerr == LOCKDOWN_E_SUCCESS) {
+					printf("SUCCESS: setting wifi to %s\n", wifiopt == WIFI_ENABLE ? "on" : "off");
+				} else {
+					result = EXIT_FAILURE;
+					print_error_message(lerr);
+				}
+			}
+			break;
+		}
 	}
 
 leave:
@@ -294,4 +347,3 @@ leave:
 	}
 	return result;
 }
-
