@@ -671,7 +671,7 @@ static void print_usage(int argc, char **argv)
 	printf("  restore\tRestores a device backup from DIRECTORY.\n\n");
 	printf("options:\n");
 	printf("  -d, --debug\t\tenable communication debugging\n");
-	printf("  -u, --udid UDID\ttarget specific device by its 40-digit device UDID\n");
+	printf("  -u, --udid UDID\ttarget specific device by UDID\n");
 	printf("  -h, --help\t\tprints usage information\n");
 	printf("\n");
 	printf("Homepage: <" PACKAGE_URL ">\n");
@@ -715,7 +715,7 @@ int main(int argc, char *argv[])
 		}
 		else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
 			i++;
-			if (!argv[i] || (strlen(argv[i]) != 40)) {
+			if (!argv[i] || !*argv[i]) {
 				print_usage(argc, argv);
 				return 0;
 			}
@@ -995,7 +995,7 @@ int main(int argc, char *argv[])
 				} else if (err == MOBILEBACKUP_E_REPLY_NOT_OK) {
 					printf("ERROR: Could not start backup process: device refused to start the backup process.\n");
 				} else {
-					printf("ERROR: Could not start backup process: unspecified error occured\n");
+					printf("ERROR: Could not start backup process: unspecified error occurred\n");
 				}
 				break;
 			}
@@ -1342,7 +1342,7 @@ files_out:
 				} else if (err == MOBILEBACKUP_E_REPLY_NOT_OK) {
 					printf("ERROR: Could not start restore process: device refused to start the restore process.\n");
 				} else {
-					printf("ERROR: Could not start restore process: unspecified error occured (%d)\n", err);
+					printf("ERROR: Could not start restore process: unspecified error occurred (%d)\n", err);
 				}
 				plist_free(backup_data);
 				break;

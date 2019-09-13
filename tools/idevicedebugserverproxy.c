@@ -50,7 +50,7 @@ typedef struct {
 } socket_info_t;
 
 struct thread_info {
-	thread_t th;
+	THREAD_T th;
 	struct thread_info *next;
 };
 
@@ -71,7 +71,7 @@ static void print_usage(int argc, char **argv)
 	printf("Usage: %s [OPTIONS] <PORT>\n", (name ? name + 1: argv[0]));
 	printf("Proxy debugserver connection from device to a local socket at PORT.\n\n");
 	printf("  -d, --debug\t\tenable communication debugging\n");
-	printf("  -u, --udid UDID\ttarget specific device by its 40-digit device UDID\n");
+	printf("  -u, --udid UDID\ttarget specific device by UDID\n");
 	printf("  -h, --help\t\tprints usage information\n");
 	printf("\n");
 	printf("Homepage: <" PACKAGE_URL ">\n");
@@ -140,7 +140,7 @@ static void *thread_client_to_device(void *data)
 	int recv_len;
 	int sent;
 	char buffer[131072];
-	thread_t dtoc;
+	THREAD_T dtoc;
 
 	debug("%s: started thread...\n", __func__);
 
@@ -205,7 +205,7 @@ static void* connection_handler(void* data)
 {
 	debugserver_error_t derr = DEBUGSERVER_E_SUCCESS;
 	socket_info_t* socket_info = (socket_info_t*)data;
-	thread_t ctod;
+	THREAD_T ctod;
 
 	debug("%s: client_fd = %d\n", __func__, socket_info->client_fd);
 
@@ -280,7 +280,7 @@ int main(int argc, char *argv[])
 		}
 		else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
 			i++;
-			if (!argv[i] || (strlen(argv[i]) != 40)) {
+			if (!argv[i] || !*argv[i]) {
 				print_usage(argc, argv);
 				return 0;
 			}

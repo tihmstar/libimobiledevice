@@ -79,7 +79,7 @@ int main(int argc, char **argv)
 		}
 		else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
 			i++;
-			if (!argv[i] || (strlen(argv[i]) != 40)) {
+			if (!argv[i] || !*argv[i]) {
 				print_usage(argc, argv);
 				result = 0;
 				goto cleanup;
@@ -310,7 +310,7 @@ void print_usage(int argc, char **argv)
 	printf("Use diagnostics interface of a device running iOS 4 or later.\n\n");
 	printf(" Where COMMAND is one of:\n");
 	printf("  diagnostics [TYPE]\t\tprint diagnostics information from device by TYPE (All, WiFi, GasGauge, NAND)\n");
-	printf("  mobilegestalt KEY [...]\tprint mobilegestalt keys passed as arguments seperated by a space.\n");
+	printf("  mobilegestalt KEY [...]\tprint mobilegestalt keys passed as arguments separated by a space.\n");
 	printf("  ioreg [PLANE]\t\t\tprint IORegistry of device, optionally by PLANE (IODeviceTree, IOPower, IOService) (iOS 5+ only)\n");
 	printf("  ioregentry [KEY]\t\tprint IORegistry entry of device (AppleARMPMUCharger, ASPStorage, ...) (iOS 5+ only)\n");
 	printf("  shutdown\t\t\tshutdown device\n");
@@ -318,7 +318,7 @@ void print_usage(int argc, char **argv)
 	printf("  sleep\t\t\t\tput device into sleep mode (disconnects from host)\n\n");
 	printf(" The following OPTIONS are accepted:\n");
 	printf("  -d, --debug\t\tenable communication debugging\n");
-	printf("  -u, --udid UDID\ttarget specific device by its 40-digit device UDID\n");
+	printf("  -u, --udid UDID\ttarget specific device by UDID\n");
 	printf("  -h, --help\t\tprints usage information\n");
 	printf("\n");
 	printf("Homepage: <" PACKAGE_URL ">\n");

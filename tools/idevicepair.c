@@ -2,8 +2,8 @@
  * idevicepair.c
  * Manage pairings with devices and this host
  *
- * Copyright (c) 2014 Martin Szulecki All Rights Reserved.
- * Copyright (c) 2010 Nikias Bassen All Rights Reserved.
+ * Copyright (c) 2010-2019 Nikias Bassen, All Rights Reserved.
+ * Copyright (c) 2014 Martin Szulecki, All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -48,6 +48,7 @@ static void print_error_message(lockdownd_error_t err)
 		case LOCKDOWN_E_PASSWORD_PROTECTED:
 			printf("ERROR: Could not validate with device %s because a passcode is set. Please enter the passcode on the device and retry.\n", udid);
 			break;
+		case LOCKDOWN_E_INVALID_CONF:
 		case LOCKDOWN_E_INVALID_HOST_ID:
 			printf("ERROR: Device %s is not paired with this host\n", udid);
 			break;
@@ -76,11 +77,11 @@ static void print_usage(int argc, char **argv)
 	printf("  pair         pair device with this host\n");
 	printf("  validate     validate if device is paired with this host\n");
 	printf("  unpair       unpair device with this host\n");
-  printf("  list         list devices paired with this host\n");
-  printf("  wifi <on/off>    enable/disable wifi connections\n\n");
+	printf("  list         list devices paired with this host\n");
+	printf("  wifi <on/off>    enable/disable wifi connections\n\n");
 	printf(" The following OPTIONS are accepted:\n");
-  printf("  -d, --debug      enable communication debugging\n");
-	printf("  -u, --udid UDID  target specific device by its 40-digit device UDID\n");
+	printf("  -d, --debug      enable communication debugging\n");
+	printf("  -u, --udid UDID  target specific device by UDID\n");
 	printf("  -h, --help       prints usage information\n");
 	printf("\n");
 	printf("Homepage: <" PACKAGE_URL ">\n");
@@ -89,9 +90,9 @@ static void print_usage(int argc, char **argv)
 static void parse_opts(int argc, char **argv)
 {
 	static struct option longopts[] = {
-		{"help", 0, NULL, 'h'},
-		{"udid", 1, NULL, 'u'},
-		{"debug", 0, NULL, 'd'},
+		{"help", no_argument, NULL, 'h'},
+		{"udid", required_argument, NULL, 'u'},
+		{"debug", no_argument, NULL, 'd'},
 		{NULL, 0, NULL, 0}
 	};
 	int c;
@@ -107,8 +108,8 @@ static void parse_opts(int argc, char **argv)
 			print_usage(argc, argv);
 			exit(EXIT_SUCCESS);
 		case 'u':
-			if (strlen(optarg) != 40) {
-				printf("%s: invalid UDID specified (length != 40)\n", argv[0]);
+			if (!*optarg) {
+				fprintf(stderr, "ERROR: UDID must not be empty!\n");
 				print_usage(argc, argv);
 				exit(2);
 			}
@@ -136,10 +137,10 @@ int main(int argc, char **argv)
 
 	char *type = NULL;
 	char *cmd;
-  t_wifi wifiopt = WIFI_SHOW;
-  typedef enum {
+	t_wifi wifiopt = WIFI_SHOW;
+	typedef enum {
 		OP_NONE = 0, OP_PAIR, OP_VALIDATE, OP_UNPAIR, OP_LIST, OP_HOSTID, OP_SYSTEMBUID, OP_WIFI
-  } op_t;
+	} op_t;
 	op_t op = OP_NONE;
 
 	parse_opts(argc, argv);
@@ -215,12 +216,13 @@ int main(int argc, char **argv)
 
 	if (udid) {
 		ret = idevice_new(&device, udid);
-		free(udid);
-		udid = NULL;
 		if (ret != IDEVICE_E_SUCCESS) {
 			printf("No device found with udid %s, is it plugged in?\n", udid);
+			free(udid);
 			return EXIT_FAILURE;
 		}
+		free(udid);
+		udid = NULL;
 	} else {
 		ret = idevice_new(&device, NULL);
 		if (ret != IDEVICE_E_SUCCESS) {
@@ -290,7 +292,9 @@ int main(int argc, char **argv)
 		break;
 
 		case OP_VALIDATE:
-		lerr = lockdownd_validate_pair(client, NULL);
+		lockdownd_client_free(client);
+		client = NULL;
+		lerr = lockdownd_client_new_with_handshake(device, &client, "idevicepair");
 		if (lerr == LOCKDOWN_E_SUCCESS) {
 			printf("SUCCESS: Validated pairing with device %s\n", udid);
 		} else {

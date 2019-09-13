@@ -30,9 +30,10 @@
 #include <unistd.h>
 #include "common/utils.h"
 
-#include <libimobiledevice/afc.h>
-#include <libimobiledevice/lockdown.h>
 #include <libimobiledevice/libimobiledevice.h>
+#include <libimobiledevice/lockdown.h>
+#include <libimobiledevice/service.h>
+#include <libimobiledevice/afc.h>
 #include <plist/plist.h>
 
 #ifdef WIN32
@@ -55,7 +56,8 @@ static int file_exists(const char* path)
 #endif
 }
 
-static int extract_raw_crash_report(const char* filename) {
+static int extract_raw_crash_report(const char* filename)
+{
 	int res = 0;
 	plist_t report = NULL;
 	char* raw = NULL;
@@ -135,7 +137,7 @@ static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char
 
 		char **fileinfo = NULL;
 		struct stat stbuf;
-		stbuf.st_size = 0;
+		memset(&stbuf, '\0', sizeof(struct stat));
 
 		/* assemble absolute source filename */
 		strcpy(((char*)source_filename) + device_directory_length, list[k]);
@@ -301,13 +303,14 @@ static void print_usage(int argc, char **argv)
 	printf("  -e, --extract\t\textract raw crash report into separate '.crash' file\n");
 	printf("  -k, --keep\t\tcopy but do not remove crash reports from device\n");
 	printf("  -d, --debug\t\tenable communication debugging\n");
-	printf("  -u, --udid UDID\ttarget specific device by its 40-digit device UDID\n");
+	printf("  -u, --udid UDID\ttarget specific device by UDID\n");
 	printf("  -h, --help\t\tprints usage information\n");
 	printf("\n");
 	printf("Homepage: <" PACKAGE_URL ">\n");
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[])
+{
 	idevice_t device = NULL;
 	lockdownd_client_t lockdownd = NULL;
 	afc_client_t afc = NULL;
@@ -327,7 +330,7 @@ int main(int argc, char* argv[]) {
 		}
 		else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
 			i++;
-			if (!argv[i] || (strlen(argv[i]) != 40)) {
+			if (!argv[i] || !*argv[i]) {
 				print_usage(argc, argv);
 				return 0;
 			}
@@ -396,9 +399,11 @@ int main(int argc, char* argv[]) {
 	}
 
 	/* trigger move operation on device */
-	idevice_connection_t connection = NULL;
-	device_error = idevice_connect(device, service->port, &connection);
-	if(device_error != IDEVICE_E_SUCCESS) {
+	service_client_t svcmove = NULL;
+	service_error_t service_error = service_client_new(device, service, &svcmove);
+	lockdownd_service_descriptor_free(service);
+	service = NULL;
+	if (service_error != SERVICE_E_SUCCESS) {
 		lockdownd_client_free(lockdownd);
 		idevice_free(device);
 		return -1;
@@ -410,22 +415,17 @@ int main(int argc, char* argv[]) {
 	int attempts = 0;
 	while ((strncmp(ping, "ping", 4) != 0) && (attempts < 10)) {
 		uint32_t bytes = 0;
-		device_error = idevice_connection_receive_timeout(connection, ping, 4, &bytes, 2000);
-		if ((bytes == 0) && (device_error == IDEVICE_E_SUCCESS)) {
+		service_error = service_receive_with_timeout(svcmove, ping, 4, &bytes, 2000);
+		if (service_error == SERVICE_E_SUCCESS || service_error == SERVICE_E_TIMEOUT) {
 			attempts++;
 			continue;
-		} else if (device_error < 0) {
-			fprintf(stderr, "ERROR: Crash logs could not be moved. Connection interrupted.\n");
+		} else {
+			fprintf(stderr, "ERROR: Crash logs could not be moved. Connection interrupted (%d).\n", service_error);
 			break;
 		}
 	}
-	idevice_disconnect(connection);
+	service_client_free(svcmove);
 	free(ping);
-
-	if (service) {
-		lockdownd_service_descriptor_free(service);
-		service = NULL;
-	}
 
 	if (device_error != IDEVICE_E_SUCCESS || attempts > 10) {
 		fprintf(stderr, "ERROR: Failed to receive ping message from crash report mover.\n");

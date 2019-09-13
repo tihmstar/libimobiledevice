@@ -56,7 +56,7 @@ static void print_usage(int argc, char **argv)
 	printf("           \tstores them into the existing directory specified by PATH.\n");
 	printf("           \tThe files will be stored as UUID.mobileprovision\n");
 	printf("  copy UUID PATH  Retrieves the provisioning profile identified by UUID\n");
-	printf("           \tfrom the device and stores it into the exisiting directory\n");
+	printf("           \tfrom the device and stores it into the existing directory\n");
 	printf("           \tspecified by PATH. The file will be stored as UUID.mobileprovision.\n");
 	printf("  remove UUID\tRemoves the provisioning profile identified by UUID.\n");
 	printf("  remove-all\tRemoves all installed provisioning profiles.\n");
@@ -64,7 +64,7 @@ static void print_usage(int argc, char **argv)
 	printf("           \tspecified by FILE.\n\n");
 	printf(" The following OPTIONS are accepted:\n");
 	printf("  -d, --debug      enable communication debugging\n");
-	printf("  -u, --udid UDID  target specific device by its 40-digit device UDID\n");
+	printf("  -u, --udid UDID  target specific device by UDID\n");
 	printf("  -x, --xml        print XML output when using the 'dump' command\n");
 	printf("  -h, --help       prints usage information\n");
 	printf("\n");
@@ -299,7 +299,7 @@ int main(int argc, char *argv[])
 		}
 		else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
 			i++;
-			if (!argv[i] || (strlen(argv[i]) != 40)) {
+			if (!argv[i] || !*argv[i]) {
 				print_usage(argc, argv);
 				return 0;
 			}

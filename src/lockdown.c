@@ -219,7 +219,7 @@ static lockdownd_error_t lockdown_check_result(plist_t dict, const char *query_m
 					ret = lockdownd_strtoerr(err_value);
 					free(err_value);
 				} else {
-					debug_info("ERROR: unknown error occured");
+					debug_info("ERROR: unknown error occurred");
 				}
 			}
 			return ret;
@@ -668,6 +668,7 @@ LIBIMOBILEDEVICE_API lockdownd_error_t lockdownd_client_new(idevice_t device, lo
 	client_loc->parent = plistclient;
 	client_loc->ssl_enabled = 0;
 	client_loc->session_id = NULL;
+	client_loc->mux_id = device->mux_id;
 
 	if (idevice_get_udid(device, &client_loc->udid) != IDEVICE_E_SUCCESS) {
 		debug_info("failed to get device udid.");
@@ -714,7 +715,7 @@ LIBIMOBILEDEVICE_API lockdownd_error_t lockdownd_client_new_with_handshake(idevi
 			char *s_version = NULL;
 			plist_get_string_val(p_version, &s_version);
 			if (s_version && sscanf(s_version, "%d.%d.%d", &vers[0], &vers[1], &vers[2]) >= 2) {
-				device->version = ((vers[0] & 0xFF) << 16) | ((vers[1] & 0xFF) << 8) | (vers[2] & 0xFF);
+				device->version = DEVICE_VERSION(vers[0], vers[1], vers[2]);
 			}
 			free(s_version);
 		}
@@ -725,7 +726,7 @@ LIBIMOBILEDEVICE_API lockdownd_error_t lockdownd_client_new_with_handshake(idevi
 	if (pair_record) {
 		pair_record_get_host_id(pair_record, &host_id);
 	}
-	if (LOCKDOWN_E_SUCCESS == ret && !host_id) {
+	if (LOCKDOWN_E_SUCCESS == ret && pair_record && !host_id) {
 		ret = LOCKDOWN_E_INVALID_CONF;
 	}
 
@@ -737,7 +738,7 @@ LIBIMOBILEDEVICE_API lockdownd_error_t lockdownd_client_new_with_handshake(idevi
 	plist_free(pair_record);
 	pair_record = NULL;
 
-	if (device->version < 0x070000) {
+	if (device->version < DEVICE_VERSION(7,0,0)) {
 		/* for older devices, we need to validate pairing to receive trusted host status */
 		ret = lockdownd_validate_pair(client_loc, NULL);
 
@@ -1001,7 +1002,7 @@ static lockdownd_error_t lockdownd_do_pair(lockdownd_client_t client, lockdownd_
 						wifi_node = NULL;
 					}
 
-					userpref_save_pair_record(client->udid, pair_record_plist);
+					userpref_save_pair_record(client->udid, client->mux_id, pair_record_plist);
 				}
 			}
 		} else {

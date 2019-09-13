@@ -1,8 +1,8 @@
 /*
- * syslog_relay.h
- * com.apple.syslog_relay service header file.
+ * preboard.h
+ * com.apple.preboard_v2 service header file.
  *
- * Copyright (c) 2013 Martin Szulecki All Rights Reserved.
+ * Copyright (c) 2019 Nikias Bassen, All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -19,18 +19,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef _SYSLOG_RELAY_H
-#define _SYSLOG_RELAY_H
+#ifndef __PREBOARD_H
+#define __PREBOARD_H
 
-#include "libimobiledevice/syslog_relay.h"
-#include "service.h"
+#include "libimobiledevice/preboard.h"
+#include "property_list_service.h"
 #include "common/thread.h"
 
-struct syslog_relay_client_private {
-	service_client_t parent;
-	THREAD_T worker;
+struct preboard_client_private {
+	property_list_service_client_t parent;
+	THREAD_T receive_status_thread;
 };
-
-void *syslog_relay_worker(void *arg);
 
 #endif
