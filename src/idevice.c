@@ -268,10 +268,20 @@ LIBIMOBILEDEVICE_API void idevice_set_debug_level(int level)
 	internal_set_debug_level(level);
 }
 
-LIBIMOBILEDEVICE_API idevice_error_t idevice_new(idevice_t * device, const char *udid)
+LIBIMOBILEDEVICE_API idevice_error_t idevice_new(idevice_t * device, const char *udid){
+	return idevice_new_with_options(device, udid, IDEVICE_LOOKUP_USBMUX | IDEVICE_LOOKUP_NETWORK);
+}
+
+
+LIBIMOBILEDEVICE_API idevice_error_t idevice_new_with_options(idevice_t * device, const char *udid, enum idevice_lookup_options options)
 {
+	enum usbmux_lookup_options uoptions = 0;
+	if (options & IDEVICE_LOOKUP_USBMUX) 		 uoptions |= DEVICE_LOOKUP_USBMUX;
+	if (options & IDEVICE_LOOKUP_NETWORK) 		 uoptions |= DEVICE_LOOKUP_NETWORK;
+	if (options & IDEVICE_LOOKUP_PREFER_NETWORK) uoptions |= DEVICE_LOOKUP_PREFER_NETWORK;
+
 	usbmuxd_device_info_t muxdev;
-	int res = usbmuxd_get_device_by_udid(udid, &muxdev);
+	int res = usbmuxd_get_device(udid, &muxdev, uoptions);
 	if (res > 0) {
 		idevice_t dev = (idevice_t) malloc(sizeof(struct idevice_private));
 		dev->udid = strdup(muxdev.udid);

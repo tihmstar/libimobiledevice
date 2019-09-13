@@ -59,6 +59,13 @@ enum idevice_event_type {
 	IDEVICE_DEVICE_PAIRED
 };
 
+/** Device lookup options for idevice_new_with_options. */
+enum idevice_lookup_options {
+	IDEVICE_LOOKUP_USBMUX = 1 << 1, /** include USBMUX devices during lookup */
+	IDEVICE_LOOKUP_NETWORK = 1 << 2, /** include network devices during lookup */
+	IDEVICE_LOOKUP_PREFER_NETWORK = 1 << 3 /** prefer network connection if device is available via USBMUX *and* network */
+};
+
 /* event data structure */
 /** Provides information about the occurred event. */
 typedef struct {
@@ -134,10 +141,23 @@ idevice_error_t idevice_device_list_free(char **devices);
  * @param device Upon calling this function, a pointer to a location of type
  *  idevice_t. On successful return, this location will be populated.
  * @param udid The UDID to match.
+ * @param options Specifying what device connection types should be
+ *      considered during lookup. Accepts bitwise or'ed values of
+ *      usbmux_lookup_options.
+ *      If 0 (no option) is specified it will default to IDEVICE_LOOKUP_USBMUX.
+ *      To lookup both USB and network-connected devices, pass
+ *      IDEVICE_LOOKUP_USBMUX | IDEVICE_LOOKUP_NETWORK. If a device is available
+ *      both via USBMUX *and* network, it will select the USB connection.
+ *      This behavior can be changed by adding IDEVICE_LOOKUP_PREFER_NETWORK
+ *      to the options in which case it will select the network connection.
+ *		If idevice_new (without options) is called, options default to IDEVICE_LOOKUP_USBMUX | IDEVICE_LOOKUP_NETWORK
+ *
+ * @see enum idevice_lookup_options
  *
  * @return IDEVICE_E_SUCCESS if ok, otherwise an error code.
  */
 idevice_error_t idevice_new(idevice_t *device, const char *udid);
+idevice_error_t idevice_new_with_options(idevice_t *device, const char *udid, enum idevice_lookup_options options);
 
 /**
  * Cleans up an idevice structure, then frees the structure itself.
