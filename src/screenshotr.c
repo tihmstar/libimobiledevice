@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "idevice.h"
 #include "screenshotr.h"
 #include "device_link_service.h"
 #include "common/debug.h"

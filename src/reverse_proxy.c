@@ -31,6 +31,7 @@
 #include <libimobiledevice-glue/thread.h>
 #include <libimobiledevice-glue/socket.h>
 
+#include "idevice.h"
 #include "reverse_proxy.h"
 #include "lockdown.h"
 #include "common/debug.h"

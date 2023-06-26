@@ -36,9 +36,9 @@
 #include <plist/plist.h>
 #include <libimobiledevice-glue/utils.h>
 
+#include "idevice.h"
 #include "property_list_service.h"
 #include "lockdown.h"
-#include "idevice.h"
 #include "common/debug.h"
 #include "common/userpref.h"
 #include "asprintf.h"

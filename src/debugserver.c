@@ -31,6 +31,7 @@
 
 #include <libimobiledevice-glue/utils.h>
 
+#include "idevice.h"
 #include "debugserver.h"
 #include "lockdown.h"
 #include "common/debug.h"

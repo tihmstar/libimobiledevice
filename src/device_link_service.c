@@ -24,6 +24,7 @@
 #endif
 #include <string.h>
 #include <stdlib.h>
+#include "idevice.h"
 #include "device_link_service.h"
 #include "property_list_service.h"
 #include "common/debug.h"
@@ -471,4 +472,3 @@ device_link_service_error_t device_link_service_receive(device_link_service_clie
 
 	return device_link_error(property_list_service_receive_plist(client->parent, plist));
 }
-

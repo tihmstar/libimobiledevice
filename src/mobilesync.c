@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#include "idevice.h"
 #include "mobilesync.h"
 #include "device_link_service.h"
 #include "common/debug.h"

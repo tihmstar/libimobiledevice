@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <plist/plist.h>
 
+#include "idevice.h"
 #include "mobile_image_mounter.h"
 #include "property_list_service.h"
 #include "common/debug.h"

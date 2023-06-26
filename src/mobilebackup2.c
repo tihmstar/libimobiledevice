@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "idevice.h"
 #include "mobilebackup2.h"
 #include "device_link_service.h"
 #include "common/debug.h"

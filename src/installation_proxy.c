@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <plist/plist.h>
 
+#include "idevice.h"
 #include "installation_proxy.h"
 #include "property_list_service.h"
 #include "common/debug.h"

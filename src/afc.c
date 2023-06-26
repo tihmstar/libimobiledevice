@@ -29,8 +29,8 @@
 #include <unistd.h>
 #include <string.h>
 
-#include "afc.h"
 #include "idevice.h"
+#include "afc.h"
 #include "common/debug.h"
 #include "endianness.h"
 

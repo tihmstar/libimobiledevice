@@ -27,9 +27,9 @@
 #include <stdlib.h>
 #include <plist/plist.h>
 
+#include "idevice.h"
 #include "property_list_service.h"
 #include "restore.h"
-#include "idevice.h"
 #include "common/debug.h"
 
 #define RESULT_SUCCESS 0

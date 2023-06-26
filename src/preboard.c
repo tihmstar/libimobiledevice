@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <plist/plist.h>
 
+#include "idevice.h"
 #include "preboard.h"
 #include "lockdown.h"
 #include "common/debug.h"

@@ -28,6 +28,7 @@
 #include <plist/plist.h>
 #include <stdio.h>
 
+#include "idevice.h"
 #include "misagent.h"
 #include "property_list_service.h"
 #include "common/debug.h"

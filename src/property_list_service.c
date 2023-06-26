@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "idevice.h"
 #include "property_list_service.h"
 #include "common/debug.h"
 #include "endianness.h"

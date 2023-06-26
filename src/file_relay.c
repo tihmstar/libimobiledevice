@@ -24,6 +24,7 @@
 #endif
 #include <string.h>
 #include <stdlib.h>
+#include "idevice.h"
 #include "file_relay.h"
 #include "property_list_service.h"
 #include "common/debug.h"

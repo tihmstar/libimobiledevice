@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "idevice.h"
 #include "syslog_relay.h"
 #include "lockdown.h"
 #include "common/debug.h"

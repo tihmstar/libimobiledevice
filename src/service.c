@@ -24,8 +24,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "service.h"
 #include "idevice.h"
+#include "service.h"
 #include "common/debug.h"
 
 /**

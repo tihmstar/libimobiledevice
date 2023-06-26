@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <plist/plist.h>
 
+#include "idevice.h"
 #include "webinspector.h"
 #include "lockdown.h"
 #include "common/debug.h"

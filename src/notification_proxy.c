@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <plist/plist.h>
 
+#include "idevice.h"
 #include "notification_proxy.h"
 #include "property_list_service.h"
 #include "common/debug.h"
