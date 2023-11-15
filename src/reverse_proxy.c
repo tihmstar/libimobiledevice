@@ -25,6 +25,9 @@
 #endif
 #include <string.h>
 #include <stdlib.h>
+#define _GNU_SOURCE 1
+#define __USE_GNU 1
+#include <stdio.h>
 #include <errno.h>
 
 #include <plist/plist.h>
@@ -92,7 +95,7 @@ static void _reverse_proxy_log(reverse_proxy_client_t client, const char* format
 	va_list args;
 	va_start(args, format);
 	char* buffer = NULL;
-	(void)vasprintf(&buffer, format, args);
+	if(vasprintf(&buffer, format, args)<0){}
 	va_end(args);
 	client->log_cb(client, buffer, client->log_cb_user_data);
 	free(buffer);
@@ -114,7 +117,7 @@ static void _reverse_proxy_status(reverse_proxy_client_t client, int status, con
 	va_list args;
 	va_start(args, format);
 	char* buffer = NULL;
-	(void)vasprintf(&buffer, format, args);
+	if(vasprintf(&buffer, format, args)<0){}
 	va_end(args);
 	client->status_cb(client, status, buffer, client->status_cb_user_data);
 	free(buffer);

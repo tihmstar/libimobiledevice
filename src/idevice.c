@@ -32,7 +32,11 @@
 
 #ifdef WIN32
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
 #endif
 
 #include <usbmuxd.h>
@@ -324,7 +328,21 @@ LIBIMOBILEDEVICE_API idevice_error_t idevice_get_device_list_extended(idevice_in
 			newlist[newcount]->conn_data = NULL;
 		} else if (dev_list[i].conn_type == CONNECTION_TYPE_NETWORK) {
 			newlist[newcount]->conn_type = CONNECTION_NETWORK;
-			size_t addrlen = ((uint8_t*)dev_list[i].conn_data)[0];
+			struct sockaddr* saddr = (struct sockaddr*)(dev_list[i].conn_data);
+			size_t addrlen = 0;
+			switch (saddr->sa_family) {
+				case AF_INET:
+					addrlen = sizeof(struct sockaddr_in);
+					break;
+#ifdef AF_INET6
+				case AF_INET6:
+					addrlen = sizeof(struct sockaddr_in6);
+					break;
+#endif
+				default:
+					debug_info("Unsupported address family 0x%02x\n", saddr->sa_family);
+					continue;
+			}
 			newlist[newcount]->conn_data = malloc(addrlen);
 			memcpy(newlist[newcount]->conn_data, dev_list[i].conn_data, addrlen);
 		}
@@ -426,9 +444,25 @@ static idevice_t idevice_from_mux_device(usbmuxd_device_info_t *muxdev)
 		break;
 	case CONNECTION_TYPE_NETWORK:
 		device->conn_type = CONNECTION_NETWORK;
-		size_t len = ((uint8_t*)muxdev->conn_data)[0];
-		device->conn_data = malloc(len);
-		memcpy(device->conn_data, muxdev->conn_data, len);
+		struct sockaddr* saddr = (struct sockaddr*)(muxdev->conn_data);
+		size_t addrlen = 0;
+		switch (saddr->sa_family) {
+			case AF_INET:
+				addrlen = sizeof(struct sockaddr_in);
+				break;
+#ifdef AF_INET6
+			case AF_INET6:
+				addrlen = sizeof(struct sockaddr_in6);
+				break;
+#endif
+			default:
+				debug_info("Unsupported address family 0x%02x\n", saddr->sa_family);
+				free(device->udid);
+				free(device);
+				return NULL;
+		}
+		device->conn_data = malloc(addrlen);
+		memcpy(device->conn_data, muxdev->conn_data, addrlen);
 		break;
 	default:
 		device->conn_type = 0;
@@ -515,27 +549,16 @@ LIBIMOBILEDEVICE_API idevice_error_t idevice_connect(idevice_t device, uint16_t 
 		return IDEVICE_E_SUCCESS;
 	}
 	if (device->conn_type == CONNECTION_NETWORK) {
-		struct sockaddr_storage saddr_storage;
-		struct sockaddr* saddr = (struct sockaddr*)&saddr_storage;
-
-		/* FIXME: Improve handling of this platform/host dependent connection data */
-		if (((char*)device->conn_data)[1] == 0x02) { // AF_INET
-			saddr->sa_family = AF_INET;
-			memcpy(&saddr->sa_data[0], (char*)device->conn_data + 2, 14);
-		}
-		else if (((char*)device->conn_data)[1] == 0x1E) { // AF_INET6 (bsd)
+		struct sockaddr* saddr = (struct sockaddr*)(device->conn_data);
+		switch (saddr->sa_family) {
+			case AF_INET:
 #ifdef AF_INET6
-			saddr->sa_family = AF_INET6;
-			/* copy the address and the host dependent scope id */
-			memcpy(&saddr->sa_data[0], (char*)device->conn_data + 2, 26);
-#else
-			debug_info("ERROR: Got an IPv6 address but this system doesn't support IPv6");
-			return IDEVICE_E_UNKNOWN_ERROR;
+			case AF_INET6:
 #endif
-		}
-		else {
-			debug_info("Unsupported address family 0x%02x", ((char*)device->conn_data)[1]);
-			return IDEVICE_E_UNKNOWN_ERROR;
+				break;
+			default:
+				debug_info("Unsupported address family 0x%02x", saddr->sa_family);
+				return IDEVICE_E_UNKNOWN_ERROR;
 		}
 
 		char addrtxt[48];
@@ -1034,18 +1057,33 @@ static void internal_ssl_cleanup(ssl_data_t ssl_data)
 }
 
 #ifdef HAVE_OPENSSL
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+static long ssl_idevice_bio_callback(BIO *b, int oper, const char *argp, size_t len, int argi, long argl, int retvalue, size_t *processed)
+#else
 static long ssl_idevice_bio_callback(BIO *b, int oper, const char *argp, int argi, long argl, long retvalue)
+#endif
 {
+	ssize_t bytes = 0;
 	idevice_connection_t conn = (idevice_connection_t)BIO_get_callback_arg(b);
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
 	size_t len = (size_t)argi;
+	size_t *processed = (size_t*)&bytes;
+#endif
 	switch (oper) {
 	case (BIO_CB_READ|BIO_CB_RETURN):
-		return argp ? (long)internal_ssl_read(conn, (char *)argp, len) : 0;
+		if (argp) {
+			bytes = internal_ssl_read(conn, (char *)argp, len);
+			*processed = bytes;
+			return (long)bytes;
+		}
+		return 0;
 	case (BIO_CB_PUTS|BIO_CB_RETURN):
 		len = strlen(argp);
 		// fallthrough
 	case (BIO_CB_WRITE|BIO_CB_RETURN):
-		return (long)internal_ssl_write(conn, argp, len);
+		bytes = internal_ssl_write(conn, argp, len);
+		*processed = bytes;
+		return (long)bytes;
 	default:
 		return retvalue;
 	}
@@ -1056,7 +1094,11 @@ static BIO *ssl_idevice_bio_new(idevice_connection_t conn)
 	BIO *b = BIO_new(BIO_s_null());
 	if (!b) return NULL;
 	BIO_set_callback_arg(b, (char *)conn);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	BIO_set_callback_ex(b, ssl_idevice_bio_callback);
+#else
 	BIO_set_callback(b, ssl_idevice_bio_callback);
+#endif
 	return b;
 }
 
@@ -1234,6 +1276,16 @@ LIBIMOBILEDEVICE_API idevice_error_t idevice_connection_enable_ssl(idevice_conne
 	X509_free(rootCert);
 	free(root_cert.data);
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	EVP_PKEY* rootPrivKey = NULL;
+	membp = BIO_new_mem_buf(root_privkey.data, root_privkey.size);
+	PEM_read_bio_PrivateKey(membp, &rootPrivKey, NULL, NULL);
+	BIO_free(membp);
+	if (SSL_CTX_use_PrivateKey(ssl_ctx, rootPrivKey) != 1) {
+		debug_info("WARNING: Could not load RootPrivateKey");
+	}
+	EVP_PKEY_free(rootPrivKey);
+#else
 	RSA* rootPrivKey = NULL;
 	membp = BIO_new_mem_buf(root_privkey.data, root_privkey.size);
 	PEM_read_bio_RSAPrivateKey(membp, &rootPrivKey, NULL, NULL);
@@ -1242,6 +1294,7 @@ LIBIMOBILEDEVICE_API idevice_error_t idevice_connection_enable_ssl(idevice_conne
 		debug_info("WARNING: Could not load RootPrivateKey");
 	}
 	RSA_free(rootPrivKey);
+#endif
 	free(root_privkey.data);
 
 	SSL *ssl = SSL_new(ssl_ctx);
