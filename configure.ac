@@ -75,7 +75,7 @@ AC_CHECK_DECL([plist_from_json], [AC_DEFINE([HAVE_PLIST_JSON], [1], [Define if l
 # Check for operating system
 AC_MSG_CHECKING([for platform-specific build settings])
 case ${host_os} in
-  *mingw32*|*cygwin*)
+  *mingw32*|*cygwin*|*msys*)
     AC_MSG_RESULT([${host_os}])
     win32=true
     AC_DEFINE(WINVER, 0x0501, [minimum Windows version])

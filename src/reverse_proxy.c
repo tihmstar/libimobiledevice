@@ -23,12 +23,13 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
-#include <string.h>
-#include <stdlib.h>
 #define _GNU_SOURCE 1
 #define __USE_GNU 1
+#include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <stdio.h>
 
 #include <plist/plist.h>
 #include <libimobiledevice-glue/thread.h>
