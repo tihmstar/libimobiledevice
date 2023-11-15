@@ -46,7 +46,7 @@
 #include <libimobiledevice/notification_proxy.h>
 #include <libimobiledevice/mobile_image_mounter.h>
 #include <asprintf.h>
-#include "common/utils.h"
+#include <plist/plist.h>
 
 static int list_mode = 0;
 static int use_network = 0;
@@ -62,27 +62,27 @@ typedef enum {
 	DISK_IMAGE_UPLOAD_TYPE_UPLOAD_IMAGE
 } disk_image_upload_type_t;
 
-static void print_usage(int argc, char **argv)
+static void print_usage(int argc, char **argv, int is_error)
 {
-	char *name = NULL;
-
-	name = strrchr(argv[0], '/');
-	printf("Usage: %s [OPTIONS] IMAGE_FILE IMAGE_SIGNATURE_FILE\n", (name ? name + 1: argv[0]));
-	printf("\n");
-	printf("Mounts the specified disk image on the device.\n");
-	printf("\n");
-	printf("OPTIONS:\n");
-	printf("  -u, --udid UDID\ttarget specific device by UDID\n");
-	printf("  -n, --network\t\tconnect to network device\n");
-	printf("  -l, --list\t\tList mount information\n");
-	printf("  -t, --imagetype\tImage type to use, default is 'Developer'\n");
-	printf("  -x, --xml\t\tUse XML output\n");
-	printf("  -d, --debug\t\tenable communication debugging\n");
-	printf("  -h, --help\t\tprints usage information\n");
-	printf("  -v, --version\t\tprints version information\n");
-	printf("\n");
-	printf("Homepage:    <" PACKAGE_URL ">\n");
-	printf("Bug Reports: <" PACKAGE_BUGREPORT ">\n");
+	char *name = strrchr(argv[0], '/');
+	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS] IMAGE_FILE IMAGE_SIGNATURE_FILE\n", (name ? name + 1: argv[0]));
+	fprintf(is_error ? stderr : stdout,
+		"\n"
+		"Mounts the specified disk image on the device.\n"
+		"\n"
+		"OPTIONS:\n"
+		"  -u, --udid UDID       target specific device by UDID\n"
+		"  -n, --network         connect to network device\n"
+		"  -l, --list            List mount information\n"
+		"  -t, --imagetype TYPE  Image type to use, default is 'Developer'\n"
+		"  -x, --xml             Use XML output\n"
+		"  -d, --debug           enable communication debugging\n"
+		"  -h, --help            prints usage information\n"
+		"  -v, --version         prints version information\n"
+		"\n"
+		"Homepage:    <" PACKAGE_URL ">\n"
+		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
+	);
 }
 
 static void parse_opts(int argc, char **argv)
@@ -108,12 +108,12 @@ static void parse_opts(int argc, char **argv)
 
 		switch (c) {
 		case 'h':
-			print_usage(argc, argv);
+			print_usage(argc, argv, 0);
 			exit(0);
 		case 'u':
 			if (!*optarg) {
 				fprintf(stderr, "ERROR: UDID must not be empty!\n");
-				print_usage(argc, argv);
+				print_usage(argc, argv, 1);
 				exit(2);
 			}
 			udid = optarg;
@@ -137,19 +137,10 @@ static void parse_opts(int argc, char **argv)
 			printf("%s %s\n", TOOL_NAME, PACKAGE_VERSION);
 			exit(0);
 		default:
-			print_usage(argc, argv);
+			print_usage(argc, argv, 1);
 			exit(2);
 		}
 	}
-}
-
-static void print_xml(plist_t node)
-{
-	char *xml = NULL;
-	uint32_t len = 0;
-	plist_to_xml(node, &xml, &len);
-	if (xml)
-		puts(xml);
 }
 
 static ssize_t mim_upload_cb(void* buf, size_t size, void* userdata)
@@ -224,6 +215,20 @@ int main(int argc, char **argv)
 		}
 	}
 
+	if (product_version_major == 16) {
+		uint8_t dev_mode_status = 0;
+		plist_t val = NULL;
+		ldret = lockdownd_get_value(lckd, "com.apple.security.mac.amfi", "DeveloperModeStatus", &val);
+		if (ldret == LOCKDOWN_E_SUCCESS) {
+			plist_get_bool_val(val, &dev_mode_status);
+			plist_free(val);
+		}
+		if (!dev_mode_status) {
+			printf("ERROR: You have to enable Developer Mode on the given device in order to allowing mounting a developer disk image.\n");
+			goto leave;
+		}
+	}
+
 	lockdownd_start_service(lckd, "com.apple.mobile.mobile_image_mounter", &service);
 
 	if (!service || service->port == 0) {
@@ -283,11 +288,7 @@ int main(int argc, char **argv)
 		err = mobile_image_mounter_lookup_image(mim, imagetype, &result);
 		if (err == MOBILE_IMAGE_MOUNTER_E_SUCCESS) {
 			res = 0;
-			if (xml_mode) {
-				print_xml(result);
-			} else {
-				plist_print_to_stream(result, stdout);
-			}
+			plist_write_to_stream(result, stdout, (xml_mode) ? PLIST_FORMAT_XML : PLIST_FORMAT_LIMD, 0);
 		} else {
 			printf("Error: lookup_image returned %d\n", err);
 		}
@@ -415,20 +416,12 @@ int main(int argc, char **argv)
 							res = 0;
 						} else {
 							printf("unexpected status value:\n");
-							if (xml_mode) {
-								print_xml(result);
-							} else {
-								plist_print_to_stream(result, stdout);
-							}
+							plist_write_to_stream(result, stdout, (xml_mode) ? PLIST_FORMAT_XML : PLIST_FORMAT_LIMD, 0);
 						}
 						free(status);
 					} else {
 						printf("unexpected result:\n");
-						if (xml_mode) {
-							print_xml(result);
-						} else {
-							plist_print_to_stream(result, stdout);
-						}
+						plist_write_to_stream(result, stdout, (xml_mode) ? PLIST_FORMAT_XML : PLIST_FORMAT_LIMD, 0);
 					}
 				}
 				node = plist_dict_get_item(result, "Error");
@@ -440,19 +433,11 @@ int main(int argc, char **argv)
 						free(error);
 					} else {
 						printf("unexpected result:\n");
-						if (xml_mode) {
-							print_xml(result);
-						} else {
-							plist_print_to_stream(result, stdout);
-						}
+						plist_write_to_stream(result, stdout, (xml_mode) ? PLIST_FORMAT_XML : PLIST_FORMAT_LIMD, 0);
 					}
 
 				} else {
-					if (xml_mode) {
-						print_xml(result);
-					} else {
-						plist_print_to_stream(result, stdout);
-					}
+					plist_write_to_stream(result, stdout, (xml_mode) ? PLIST_FORMAT_XML : PLIST_FORMAT_LIMD, 0);
 				}
 			}
 		} else {

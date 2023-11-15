@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <plist/plist.h>
 
+#include "idevice.h"
 #include "installation_proxy.h"
 #include "property_list_service.h"
 #include "common/debug.h"
@@ -282,9 +283,6 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_client_free(instproxy_client_t 
  *
  * @param client The connected installation_proxy client.
  * @param command The command to execute. Required.
- * @param client_options The client options to use, as PLIST_DICT, or NULL.
- * @param appid The ApplicationIdentifier to add or NULL if not required.
- * @param package_path The installation package path or NULL if not required.
  *
  * @return INSTPROXY_E_SUCCESS on success or an INSTPROXY_E_* error value if
  *     an error occurred.
@@ -367,17 +365,14 @@ static instproxy_error_t instproxy_receive_status_loop(instproxy_client_t client
 			/* check status from response */
 			instproxy_status_get_name(node, &status_name);
 			if (!status_name) {
-				debug_info("failed to retrieve name from status response with error %d.", res);
-				complete = 1;
-			}
-
-			if (status_name) {
+				debug_info("ignoring message without Status key:");
+				debug_plist(node);
+			} else {
 				if (!strcmp(status_name, "Complete")) {
 					complete = 1;
 				} else {
 					res = INSTPROXY_E_OP_IN_PROGRESS;
 				}
-
 #ifndef STRIP_DEBUG_CODE
 				percent_complete = -1;
 				instproxy_status_get_percent_complete(node, &percent_complete);
@@ -666,7 +661,7 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_install(instproxy_client_t clie
 		plist_dict_set_item(command, "ClientOptions", plist_copy(client_options));
 	plist_dict_set_item(command, "PackagePath", plist_new_string(pkg_path));
 
-	res = instproxy_perform_command(client, command, INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
+	res = instproxy_perform_command(client, command, status_cb == NULL ? INSTPROXY_COMMAND_TYPE_SYNC : INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
 
 	plist_free(command);
 
@@ -683,7 +678,7 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_upgrade(instproxy_client_t clie
 		plist_dict_set_item(command, "ClientOptions", plist_copy(client_options));
 	plist_dict_set_item(command, "PackagePath", plist_new_string(pkg_path));
 
-	res = instproxy_perform_command(client, command, INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
+	res = instproxy_perform_command(client, command, status_cb == NULL ? INSTPROXY_COMMAND_TYPE_SYNC : INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
 
 	plist_free(command);
 
@@ -700,7 +695,7 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_uninstall(instproxy_client_t cl
 		plist_dict_set_item(command, "ClientOptions", plist_copy(client_options));
 	plist_dict_set_item(command, "ApplicationIdentifier", plist_new_string(appid));
 
-	res = instproxy_perform_command(client, command, INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
+	res = instproxy_perform_command(client, command, status_cb == NULL ? INSTPROXY_COMMAND_TYPE_SYNC : INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
 
 	plist_free(command);
 
@@ -733,7 +728,7 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_archive(instproxy_client_t clie
 		plist_dict_set_item(command, "ClientOptions", plist_copy(client_options));
 	plist_dict_set_item(command, "ApplicationIdentifier", plist_new_string(appid));
 
-	res = instproxy_perform_command(client, command, INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
+	res = instproxy_perform_command(client, command, status_cb == NULL ? INSTPROXY_COMMAND_TYPE_SYNC : INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
 
 	plist_free(command);
 
@@ -750,7 +745,7 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_restore(instproxy_client_t clie
 		plist_dict_set_item(command, "ClientOptions", plist_copy(client_options));
 	plist_dict_set_item(command, "ApplicationIdentifier", plist_new_string(appid));
 
-	res = instproxy_perform_command(client, command, INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
+	res = instproxy_perform_command(client, command, status_cb == NULL ? INSTPROXY_COMMAND_TYPE_SYNC : INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
 
 	plist_free(command);
 
@@ -767,7 +762,7 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_remove_archive(instproxy_client
 		plist_dict_set_item(command, "ClientOptions", plist_copy(client_options));
 	plist_dict_set_item(command, "ApplicationIdentifier", plist_new_string(appid));
 
-	res = instproxy_perform_command(client, command, INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
+	res = instproxy_perform_command(client, command, status_cb == NULL ? INSTPROXY_COMMAND_TYPE_SYNC : INSTPROXY_COMMAND_TYPE_ASYNC, status_cb, user_data);
 
 	plist_free(command);
 
@@ -940,7 +935,7 @@ LIBIMOBILEDEVICE_API void instproxy_client_options_add(plist_t client_options, .
 		if (!strcmp(key, "SkipUninstall")) {
 			int intval = va_arg(args, int);
 			plist_dict_set_item(client_options, key, plist_new_bool(intval));
-		} else if (!strcmp(key, "ApplicationSINF") || !strcmp(key, "iTunesMetadata") || !strcmp(key, "ReturnAttributes")) {
+		} else if (!strcmp(key, "ApplicationSINF") || !strcmp(key, "iTunesMetadata") || !strcmp(key, "ReturnAttributes") || !strcmp(key, "BundleIDs")) {
 			plist_t plistval = va_arg(args, plist_t);
 			if (!plistval) {
 				free(key);
@@ -989,9 +984,9 @@ LIBIMOBILEDEVICE_API void instproxy_client_options_free(plist_t client_options)
 	}
 }
 
-LIBIMOBILEDEVICE_API instproxy_error_t instproxy_client_get_path_for_bundle_identifier(instproxy_client_t client, const char* appid, char** path)
+LIBIMOBILEDEVICE_API instproxy_error_t instproxy_client_get_path_for_bundle_identifier(instproxy_client_t client, const char* bundle_id, char** path)
 {
-	if (!client || !client->parent || !appid)
+	if (!client || !client->parent || !bundle_id)
 		return INSTPROXY_E_INVALID_ARG;
 
 	plist_t apps = NULL;
@@ -1004,7 +999,7 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_client_get_path_for_bundle_iden
 	instproxy_client_options_set_return_attributes(client_opts, "CFBundleIdentifier", "CFBundleExecutable", "Path", NULL);
 
 	// only query for specific appid
-	const char* appids[] = {appid, NULL};
+	const char* appids[] = {bundle_id, NULL};
 
 	// query device for list of apps
 	instproxy_error_t ierr = instproxy_lookup(client, appids, client_opts, &apps);
@@ -1015,7 +1010,7 @@ LIBIMOBILEDEVICE_API instproxy_error_t instproxy_client_get_path_for_bundle_iden
 		return ierr;
 	}
 
-	plist_t app_found = plist_access_path(apps, 1, appid);
+	plist_t app_found = plist_access_path(apps, 1, bundle_id);
 	if (!app_found) {
 		if (apps)
 			plist_free(apps);

@@ -24,6 +24,7 @@
 #endif
 #include <string.h>
 #include <stdlib.h>
+#include "idevice.h"
 #include "device_link_service.h"
 #include "property_list_service.h"
 #include "common/debug.h"
@@ -83,7 +84,7 @@ static int device_link_service_get_message(plist_t dl_msg, char **message)
 		return 0;
 	}
 
-	if ((strlen(cmd_str) < 9) || (strncmp(cmd_str, "DL", 2))) {
+	if ((strlen(cmd_str) < 9) || (strncmp(cmd_str, "DL", 2) != 0)) {
 		free(cmd_str);
 		return 0;
 	}
@@ -184,7 +185,7 @@ device_link_service_error_t device_link_service_version_exchange(device_link_ser
 		goto leave;
 	}
 	device_link_service_get_message(array, &msg);
-	if (!msg || strcmp(msg, "DLMessageVersionExchange")) {
+	if (!msg || strcmp(msg, "DLMessageVersionExchange") != 0) {
 		debug_info("Did not receive DLMessageVersionExchange from device!");
 		err = DEVICE_LINK_SERVICE_E_PLIST_ERROR;
 		goto leave;
@@ -239,7 +240,7 @@ device_link_service_error_t device_link_service_version_exchange(device_link_ser
 		goto leave;
 	}
 	device_link_service_get_message(array, &msg);
-	if (!msg || strcmp(msg, "DLMessageDeviceReady")) {
+	if (!msg || strcmp(msg, "DLMessageDeviceReady") != 0) {
 		debug_info("Did not get DLMessageDeviceReady!");
 		err = DEVICE_LINK_SERVICE_E_PLIST_ERROR;
 		goto leave;
@@ -403,7 +404,7 @@ device_link_service_error_t device_link_service_receive_process_message(device_l
 
 	char *msg = NULL;
 	device_link_service_get_message(pmsg, &msg);
-	if (!msg || strcmp(msg, "DLMessageProcessMessage")) {
+	if (!msg || strcmp(msg, "DLMessageProcessMessage") != 0) {
 		debug_info("Did not receive DLMessageProcessMessage as expected!");
 		err = DEVICE_LINK_SERVICE_E_PLIST_ERROR;
 		goto leave;
@@ -471,4 +472,3 @@ device_link_service_error_t device_link_service_receive(device_link_service_clie
 
 	return device_link_error(property_list_service_receive_plist(client->parent, plist));
 }
-

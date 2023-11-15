@@ -37,7 +37,7 @@
 
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/lockdown.h>
-#include "common/utils.h"
+#include <plist/plist.h>
 
 #define FORMAT_KEY_VALUE 1
 #define FORMAT_XML 2
@@ -74,6 +74,8 @@ static const char *domains[] = {
 	"com.apple.iTunes",
 	"com.apple.mobile.iTunes.store",
 	"com.apple.mobile.iTunes",
+	"com.apple.fmip",
+	"com.apple.Accessibility",
 	NULL
 };
 
@@ -91,23 +93,22 @@ static int is_domain_known(const char *domain)
 static void print_usage(int argc, char **argv, int is_error)
 {
 	int i = 0;
-	char *name = NULL;
-	name = strrchr(argv[0], '/');
+	char *name = strrchr(argv[0], '/');
 	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS]\n", (name ? name + 1: argv[0]));
 	fprintf(is_error ? stderr : stdout,
-		"\n" \
-		"Show information about a connected device.\n" \
-		"\n" \
-		"OPTIONS:\n" \
-		"  -u, --udid UDID    target specific device by UDID\n" \
-		"  -n, --network      connect to network device\n" \
-		"  -s, --simple       use a simple connection to avoid auto-pairing with the device\n" \
-		"  -q, --domain NAME  set domain of query to NAME. Default: None\n" \
-		"  -k, --key NAME     only query key specified by NAME. Default: All keys.\n" \
-		"  -x, --xml          output information as xml plist instead of key/value pairs\n" \
-		"  -h, --help         prints usage information\n" \
-		"  -d, --debug        enable communication debugging\n" \
-		"  -v, --version      prints version information\n" \
+		"\n"
+		"Show information about a connected device.\n"
+		"\n"
+		"OPTIONS:\n"
+		"  -u, --udid UDID       target specific device by UDID\n"
+		"  -n, --network         connect to network device\n"
+		"  -s, --simple          use simple connection to avoid auto-pairing with device\n"
+		"  -q, --domain NAME     set domain of query to NAME. Default: None\n" \
+		"  -k, --key NAME        only query key specified by NAME. Default: All keys.\n" \
+		"  -x, --xml             output information in XML property list format\n" \
+		"  -h, --help            prints usage information\n" \
+		"  -d, --debug           enable communication debugging\n" \
+		"  -v, --version         prints version information\n" \
 		"\n"
 	);
 	fprintf(is_error ? stderr : stdout, "Known domains are:\n\n");
@@ -211,9 +212,9 @@ int main(int argc, char *argv[])
 	ret = idevice_new_with_options(&device, udid, (use_network) ? IDEVICE_LOOKUP_NETWORK : IDEVICE_LOOKUP_USBMUX);
 	if (ret != IDEVICE_E_SUCCESS) {
 		if (udid) {
-			printf("ERROR: Device %s not found!\n", udid);
+			fprintf(stderr, "ERROR: Device %s not found!\n", udid);
 		} else {
-			printf("ERROR: No device found!\n");
+			fprintf(stderr, "ERROR: No device found!\n");
 		}
 		return -1;
 	}
@@ -240,11 +241,11 @@ int main(int argc, char *argv[])
 				free(xml_doc);
 				break;
 			case FORMAT_KEY_VALUE:
-				plist_print_to_stream(node, stdout);
+				plist_write_to_stream(node, stdout, PLIST_FORMAT_LIMD, 0);
 				break;
 			default:
 				if (key != NULL)
-					plist_print_to_stream(node, stdout);
+					plist_write_to_stream(node, stdout, PLIST_FORMAT_LIMD, 0);
 			break;
 			}
 			plist_free(node);

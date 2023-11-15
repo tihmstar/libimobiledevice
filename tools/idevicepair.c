@@ -2,7 +2,7 @@
  * idevicepair.c
  * Manage pairings with devices and this host
  *
- * Copyright (c) 2010-2019 Nikias Bassen, All Rights Reserved.
+ * Copyright (c) 2010-2021 Nikias Bassen, All Rights Reserved.
  * Copyright (c) 2014 Martin Szulecki, All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -30,13 +30,21 @@
 #include <string.h>
 #include <stdlib.h>
 #include <getopt.h>
-#ifndef WIN32
+#include <ctype.h>
+#include <unistd.h>
+#ifdef WIN32
+#include <windows.h>
+#include <conio.h>
+#else
+#include <termios.h>
 #include <signal.h>
 #endif
+
 #include "common/userpref.h"
 
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/lockdown.h>
+#include <plist/plist.h>
 
 static char *udid = NULL;
 typedef enum {
@@ -44,6 +52,69 @@ typedef enum {
        WIFI_ENABLE,
        WIFI_DISABLE
 } t_wifi;
+
+#ifdef HAVE_WIRELESS_PAIRING
+
+#ifdef WIN32
+#define BS_CC '\b'
+#define my_getch getch
+#else
+#define BS_CC 0x7f
+static int my_getch(void)
+{
+	struct termios oldt, newt;
+	int ch;
+	tcgetattr(STDIN_FILENO, &oldt);
+	newt = oldt;
+	newt.c_lflag &= ~(ICANON | ECHO);
+	tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+	ch = getchar();
+	tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+	return ch;
+}
+#endif
+
+static int get_hidden_input(char *buf, int maxlen)
+{
+	int pwlen = 0;
+	int c;
+
+	while ((c = my_getch())) {
+		if ((c == '\r') || (c == '\n')) {
+			break;
+		} else if (isprint(c)) {
+			if (pwlen < maxlen-1)
+				buf[pwlen++] = c;
+			fputc('*', stderr);
+		} else if (c == BS_CC) {
+			if (pwlen > 0) {
+				fputs("\b \b", stderr);
+				pwlen--;
+			}
+		}
+	}
+	buf[pwlen] = 0;
+	return pwlen;
+}
+
+static void pairing_cb(lockdownd_cu_pairing_cb_type_t cb_type, void *user_data, void* data_ptr, unsigned int* data_size)
+{
+	if (cb_type == LOCKDOWN_CU_PAIRING_PIN_REQUESTED) {
+		printf("Enter PIN: ");
+		fflush(stdout);
+
+		*data_size = get_hidden_input((char*)data_ptr, *data_size);
+
+		printf("\n");
+	} else if (cb_type == LOCKDOWN_CU_PAIRING_DEVICE_INFO) {
+		printf("Device info:\n");
+		plist_write_to_stream((plist_t)data_ptr, stdout, PLIST_FORMAT_LIMD, PLIST_OPT_INDENT | PLIST_OPT_INDENT_BY(2));
+	} else if (cb_type == LOCKDOWN_CU_PAIRING_ERROR) {
+		printf("ERROR: %s\n", (data_ptr) ? (char*)data_ptr : "(unknown)");
+	}
+}
+
+#endif /* HAVE_WIRELESS_PAIRING */
 
 static void print_error_message(lockdownd_error_t err)
 {
@@ -61,38 +132,67 @@ static void print_error_message(lockdownd_error_t err)
 		case LOCKDOWN_E_USER_DENIED_PAIRING:
 			printf("ERROR: Device %s said that the user denied the trust dialog.\n", udid);
 			break;
+		case LOCKDOWN_E_PAIRING_FAILED:
+			printf("ERROR: Pairing with device %s failed.\n", udid);
+			break;
+		case LOCKDOWN_E_GET_PROHIBITED:
+		case LOCKDOWN_E_PAIRING_PROHIBITED_OVER_THIS_CONNECTION:
+			printf("ERROR: Pairing is not possible over this connection.\n");
+#ifdef HAVE_WIRELESS_PAIRING
+			printf("To perform a wireless pairing use the -w command line switch. See usage or man page for details.\n");
+#endif
+			break;
 		default:
 			printf("ERROR: Device %s returned unhandled error code %d\n", udid, err);
 			break;
 	}
 }
 
-static void print_usage(int argc, char **argv)
+static void print_usage(int argc, char **argv, int is_error)
 {
-	char *name = NULL;
-
-	name = strrchr(argv[0], '/');
-	printf("Usage: %s [OPTIONS] COMMAND\n", (name ? name + 1: argv[0]));
-	printf("\n");
-	printf("Manage host pairings with devices and usbmuxd.\n");
-	printf("\n");
-	printf("Where COMMAND is one of:\n");
-	printf("  systembuid   print the system buid of the usbmuxd host\n");
-	printf("  hostid       print the host id for target device\n");
-	printf("  pair         pair device with this host\n");
-	printf("  validate     validate if device is paired with this host\n");
-	printf("  unpair       unpair device with this host\n");
-	printf("  list         list devices paired with this host\n");
-	printf("  wifi <on/off>    enable/disable wifi connections\n");
-	printf("\n");
-	printf("The following OPTIONS are accepted:\n");
-	printf("  -u, --udid UDID  target specific device by UDID\n");
-	printf("  -d, --debug      enable communication debugging\n");
-	printf("  -h, --help       prints usage information\n");
-	printf("  -v, --version    prints version information\n");
-	printf("\n");
-	printf("Homepage:    <" PACKAGE_URL ">\n");
-	printf("Bug Reports: <" PACKAGE_BUGREPORT ">\n");
+	char *name = strrchr(argv[0], '/');
+	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS] COMMAND\n", (name ? name + 1: argv[0]));
+	fprintf(is_error ? stderr : stdout,
+		"\n"
+		"Manage host pairings with devices and usbmuxd.\n"
+		"\n"
+		"Where COMMAND is one of:\n"
+		"  systembuid       print the system buid of the usbmuxd host\n"
+		"  hostid           print the host id for target device\n"
+		"  pair             pair device with this host\n"
+		"  validate         validate if device is paired with this host\n"
+		"  unpair           unpair device with this host\n"
+		"  list             list devices paired with this host\n"
+        "  wifi <on/off>    enable/disable wifi connections\n"
+		"\n"
+		"The following OPTIONS are accepted:\n"
+		"  -u, --udid UDID  target specific device by UDID\n"
+	);
+#ifdef HAVE_WIRELESS_PAIRING
+	fprintf(is_error ? stderr : stdout,
+		"  -w, --wireless   perform wireless pairing (see NOTE)\n"
+		"  -n, --network    connect to network device (see NOTE)\n"
+	);
+#endif
+	fprintf(is_error ? stderr : stdout,
+		"  -d, --debug      enable communication debugging\n"
+		"  -h, --help       prints usage information\n"
+		"  -v, --version    prints version information\n"
+	);
+#ifdef HAVE_WIRELESS_PAIRING
+	fprintf(is_error ? stderr : stdout,
+		"\n"
+		"NOTE: Pairing over network (wireless pairing) is only supported by Apple TV\n"
+		"devices. To perform a wireless pairing, you need to use the -w command line\n"
+		"switch. Make sure to put the device into pairing mode first by opening\n"
+		"Settings > Remotes and Devices > Remote App and Devices.\n"
+	);
+#endif
+	fprintf(is_error ? stderr : stdout,
+		"\n"
+		"Homepage:    <" PACKAGE_URL ">\n"
+		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
+	);
 }
 
 int main(int argc, char **argv)
@@ -101,10 +201,20 @@ int main(int argc, char **argv)
 	static struct option longopts[] = {
 		{ "help",    no_argument,       NULL, 'h' },
 		{ "udid",    required_argument, NULL, 'u' },
+#ifdef HAVE_WIRELESS_PAIRING
+		{ "wireless", no_argument,      NULL, 'w' },
+		{ "network", no_argument,       NULL, 'n' },
+		{ "hostinfo", required_argument, NULL,  1 },
+#endif
 		{ "debug",   no_argument,       NULL, 'd' },
 		{ "version", no_argument,       NULL, 'v' },
 		{ NULL, 0, NULL, 0}
 	};
+#ifdef HAVE_WIRELESS_PAIRING
+#define SHORT_OPTIONS "hu:wndv"
+#else
+#define SHORT_OPTIONS "hu:dv"
+#endif
 	lockdownd_client_t client = NULL;
 	idevice_t device = NULL;
 	idevice_error_t ret = IDEVICE_E_UNKNOWN_ERROR;
@@ -112,6 +222,11 @@ int main(int argc, char **argv)
 	int result;
 
 	char *type = NULL;
+	int use_network = 0;
+	int wireless_pairing = 0;
+#ifdef HAVE_WIRELESS_PAIRING
+	plist_t host_info_plist = NULL;
+#endif
 	char *cmd;
 	t_wifi wifiopt = WIFI_SHOW;
 	typedef enum {
@@ -119,21 +234,58 @@ int main(int argc, char **argv)
 	} op_t;
 	op_t op = OP_NONE;
 
-	while ((c = getopt_long(argc, argv, "hu:dv", longopts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, SHORT_OPTIONS, longopts, NULL)) != -1) {
 		switch (c) {
 		case 'h':
-			print_usage(argc, argv);
+			print_usage(argc, argv, 0);
 			exit(EXIT_SUCCESS);
 		case 'u':
 			if (!*optarg) {
 				fprintf(stderr, "ERROR: UDID must not be empty!\n");
-				print_usage(argc, argv);
+				print_usage(argc, argv, 1);
 				result = EXIT_FAILURE;
 				goto leave;
 			}
 			free(udid);
 			udid = strdup(optarg);
 			break;
+#ifdef HAVE_WIRELESS_PAIRING
+		case 'w':
+			wireless_pairing = 1;
+			break;
+		case 'n':
+			use_network = 1;
+			break;
+		case 1:
+			if (!*optarg) {
+				fprintf(stderr, "ERROR: --hostinfo argument must not be empty!\n");
+				result = EXIT_FAILURE;
+				goto leave;
+			}
+			if (*optarg == '@') {
+				plist_read_from_file(optarg+1, &host_info_plist, NULL);
+				if (!host_info_plist) {
+					fprintf(stderr, "ERROR: Could not read from file '%s'\n", optarg+1);
+					result = EXIT_FAILURE;
+					goto leave;
+				}
+			}
+#ifdef HAVE_PLIST_JSON
+			else if (*optarg == '{') {
+				if (plist_from_json(optarg, strlen(optarg), &host_info_plist) != PLIST_ERR_SUCCESS) {
+					fprintf(stderr, "ERROR: --hostinfo argument not valid. Make sure it is a JSON dictionary.\n");
+					result = EXIT_FAILURE;
+					goto leave;
+				}
+			}
+#endif
+			else {
+				fprintf(stderr, "ERROR: --hostinfo argument not valid. To specify a path prefix with '@'\n");
+				result = EXIT_FAILURE;
+				goto leave;
+			}
+			break;
+#endif
 		case 'd':
 			idevice_set_debug_level(1);
 			break;
@@ -142,7 +294,7 @@ int main(int argc, char **argv)
 			result = EXIT_SUCCESS;
 			goto leave;
 		default:
-			print_usage(argc, argv);
+			print_usage(argc, argv, 1);
 			result = EXIT_FAILURE;
 			goto leave;
 		}
@@ -153,8 +305,15 @@ int main(int argc, char **argv)
 #endif
 
 	if ((argc - optind) < 1) {
-		printf("ERROR: You need to specify a COMMAND!\n");
-		print_usage(argc, argv);
+		fprintf(stderr, "ERROR: You need to specify a COMMAND!\n");
+		print_usage(argc, argv, 1);
+		result = EXIT_FAILURE;
+		goto leave;
+	}
+
+	if (wireless_pairing && use_network) {
+		fprintf(stderr, "ERROR: You cannot use -w and -n together.\n");
+		print_usage(argc, argv, 1);
 		result = EXIT_FAILURE;
 		goto leave;
 	}
@@ -173,25 +332,36 @@ int main(int argc, char **argv)
 		op = OP_HOSTID;
 	} else if (!strcmp(cmd, "systembuid")) {
 		op = OP_SYSTEMBUID;
-	} else if (!strcmp(cmd, "wifi")) {
-		op = OP_WIFI;
-		if ((argc - optind) < 2) {
-			wifiopt = WIFI_SHOW;
-		}else{
-			if (!strcmp((argv+optind+1)[0], "on")) {
-				wifiopt = WIFI_ENABLE;
-			}else if (!strcmp((argv+optind+1)[0], "off")){
-				wifiopt = WIFI_DISABLE;
-			}else{
-				printf("ERROR: Invalid wifi command option '%s' specified\n", (argv+optind+1)[0]);
-				print_usage(argc, argv);
-				exit(EXIT_FAILURE);
-			}
+    } else if (!strcmp(cmd, "wifi")) {
+        op = OP_WIFI;
+        if ((argc - optind) < 2) {
+            wifiopt = WIFI_SHOW;
+        }else{
+            if (!strcmp((argv+optind+1)[0], "on")) {
+                wifiopt = WIFI_ENABLE;
+            }else if (!strcmp((argv+optind+1)[0], "off")){
+                wifiopt = WIFI_DISABLE;
+            }else{
+                printf("ERROR: Invalid wifi command option '%s' specified\n", (argv+optind+1)[0]);
+                print_usage(argc, argv, 1);
+                exit(EXIT_FAILURE);
+            }
+        }
+	} else {
+		fprintf(stderr, "ERROR: Invalid command '%s' specified\n", cmd);
+		print_usage(argc, argv, 1);
+		result = EXIT_FAILURE;
+		goto leave;
+	}
+
+	if (wireless_pairing) {
+		if (op == OP_VALIDATE || op == OP_UNPAIR) {
+			fprintf(stderr, "ERROR: Command '%s' is not supported with -w\n", cmd);
+			print_usage(argc, argv, 1);
+			result = EXIT_FAILURE;
+			goto leave;
 		}
-	}else {
-		printf("ERROR: Invalid command '%s' specified\n", cmd);
-		print_usage(argc, argv);
-		exit(EXIT_FAILURE);
+		use_network = 1;
 	}
 
 	if (op == OP_SYSTEMBUID) {
@@ -220,7 +390,7 @@ int main(int argc, char **argv)
 		goto leave;
 	}
 
-	ret = idevice_new(&device, udid);
+	ret = idevice_new_with_options(&device, udid, (use_network) ? IDEVICE_LOOKUP_NETWORK : IDEVICE_LOOKUP_USBMUX);
 	if (ret != IDEVICE_E_SUCCESS) {
 		if (udid) {
 			printf("No device found with udid %s.\n", udid);
@@ -270,7 +440,7 @@ int main(int argc, char **argv)
 		result = EXIT_FAILURE;
 		goto leave;
 	} else {
-		if (strcmp("com.apple.mobile.lockdown", type)) {
+		if (strcmp("com.apple.mobile.lockdown", type) != 0) {
 			printf("WARNING: QueryType request returned '%s'\n", type);
 		}
 		free(type);
@@ -279,7 +449,17 @@ int main(int argc, char **argv)
 	switch(op) {
 		default:
 		case OP_PAIR:
-		lerr = lockdownd_pair(client, NULL);
+#ifdef HAVE_WIRELESS_PAIRING
+		if (wireless_pairing) {
+			lerr = lockdownd_cu_pairing_create(client, pairing_cb, NULL, host_info_plist, NULL);
+			if (lerr == LOCKDOWN_E_SUCCESS) {
+				lerr = lockdownd_pair_cu(client);
+			}
+		} else
+#endif
+		{
+			lerr = lockdownd_pair(client, NULL);
+		}
 		if (lerr == LOCKDOWN_E_SUCCESS) {
 			printf("SUCCESS: Paired with device %s\n", udid);
 		} else {

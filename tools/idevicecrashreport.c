@@ -30,10 +30,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <getopt.h>
 #ifndef WIN32
 #include <signal.h>
 #endif
-#include "common/utils.h"
+#include <libimobiledevice-glue/utils.h>
 
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/lockdown.h>
@@ -46,6 +47,9 @@
 #define S_IFLNK S_IFREG
 #define S_IFSOCK S_IFREG
 #endif
+
+#define CRASH_REPORT_MOVER_SERVICE "com.apple.crashreportmover"
+#define CRASH_REPORT_COPY_MOBILE_SERVICE "com.apple.crashreportcopymobile"
 
 const char* target_directory = NULL;
 static int extract_raw_crash_reports = 0;
@@ -77,7 +81,7 @@ static int extract_raw_crash_report(const char* filename)
 	strcpy(p, ".crash");
 
 	/* read plist crash report */
-	if (plist_read_from_filename(&report, filename)) {
+	if (plist_read_from_file(filename, &report, NULL)) {
 		plist_t description_node = plist_dict_get_item(report, "description");
 		if (description_node && plist_get_node_type(description_node) == PLIST_STRING) {
 			plist_get_string_val(description_node, &raw);
@@ -100,7 +104,7 @@ static int extract_raw_crash_report(const char* filename)
 	return res;
 }
 
-static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char* device_directory, const char* host_directory)
+static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char* device_directory, const char* host_directory, const char* filename_filter)
 {
 	afc_error_t afc_error;
 	int k;
@@ -148,10 +152,18 @@ static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char
 		strcpy(((char*)source_filename) + device_directory_length, list[k]);
 
 		/* assemble absolute target filename */
+#ifdef WIN32
+		/* replace every ':' with '-' since ':' is an illegal character for file names in windows */
+		char* current_pos = strchr(list[k], ':');
+		while (current_pos) {
+			*current_pos = '-';
+			current_pos = strchr(current_pos, ':');
+		}
+#endif
 		char* p = strrchr(list[k], '.');
 		if (p != NULL && !strncmp(p, ".synced", 7)) {
 			/* make sure to strip ".synced" extension as seen on iOS 5 */
-			int newlen = strlen(list[k]) - 7;
+			size_t newlen = p - list[k];
 			strncpy(((char*)target_filename) + host_directory_length, list[k], newlen);
 			target_filename[host_directory_length + newlen] = '\0';
 		} else {
@@ -231,12 +243,16 @@ static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char
 #else
 			mkdir(target_filename, 0755);
 #endif
-			res = afc_client_copy_and_remove_crash_reports(afc, source_filename, target_filename);
+			res = afc_client_copy_and_remove_crash_reports(afc, source_filename, target_filename, filename_filter);
 
 			/* remove directory from device */
 			if (!keep_crash_reports)
 				afc_remove_path(afc, source_filename);
 		} else if (S_ISREG(stbuf.st_mode)) {
+			if (filename_filter != NULL && strstr(source_filename, filename_filter) == NULL) {
+				continue;
+			}
+
 			/* copy file to host */
 			afc_error = afc_file_open(afc, source_filename, AFC_FOPEN_RDONLY, &handle);
 			if(afc_error != AFC_E_SUCCESS) {
@@ -298,26 +314,27 @@ static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char
 	return res;
 }
 
-static void print_usage(int argc, char **argv)
+static void print_usage(int argc, char **argv, int is_error)
 {
-	char *name = NULL;
-
-	name = strrchr(argv[0], '/');
-	printf("Usage: %s [OPTIONS] DIRECTORY\n", (name ? name + 1: argv[0]));
-	printf("\n");
-	printf("Move crash reports from device to a local DIRECTORY.\n");
-	printf("\n");
-	printf("OPTIONS:\n");
-	printf("  -u, --udid UDID\ttarget specific device by UDID\n");
-	printf("  -n, --network\t\tconnect to network device\n");
-	printf("  -e, --extract\t\textract raw crash report into separate '.crash' file\n");
-	printf("  -k, --keep\t\tcopy but do not remove crash reports from device\n");
-	printf("  -d, --debug\t\tenable communication debugging\n");
-	printf("  -h, --help\t\tprints usage information\n");
-	printf("  -v, --version\t\tprints version information\n");
-	printf("\n");
-	printf("Homepage:    <" PACKAGE_URL ">\n");
-	printf("Bug Reports: <" PACKAGE_BUGREPORT ">\n");
+	char *name = strrchr(argv[0], '/');
+	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS] DIRECTORY\n", (name ? name + 1: argv[0]));
+	fprintf(is_error ? stderr : stdout,
+		"\n"
+		"Move crash reports from device to a local DIRECTORY.\n"
+		"\n"
+		"OPTIONS:\n"
+		"  -u, --udid UDID       target specific device by UDID\n"
+		"  -n, --network         connect to network device\n"
+		"  -e, --extract         extract raw crash report into separate '.crash' file\n"
+		"  -k, --keep            copy but do not remove crash reports from device\n"
+		"  -d, --debug           enable communication debugging\n"
+		"  -f, --filter NAME     filter crash reports by NAME (case sensitive)\n"
+		"  -h, --help            prints usage information\n"
+		"  -v, --version         prints version information\n"
+		"\n"
+		"Homepage:    <" PACKAGE_URL ">\n"
+		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
+	);
 }
 
 int main(int argc, char* argv[])
@@ -330,69 +347,84 @@ int main(int argc, char* argv[])
 	lockdownd_error_t lockdownd_error = LOCKDOWN_E_SUCCESS;
 	afc_error_t afc_error = AFC_E_SUCCESS;
 
-	int i;
 	const char* udid = NULL;
 	int use_network = 0;
+	const char* filename_filter = NULL;
+
+	int c = 0;
+	const struct option longopts[] = {
+		{ "debug", no_argument, NULL, 'd' },
+		{ "help", no_argument, NULL, 'h' },
+		{ "udid", required_argument, NULL, 'u' },
+		{ "network", no_argument, NULL, 'n' },
+		{ "version", no_argument, NULL, 'v' },
+		{ "filter", required_argument, NULL, 'f' },
+		{ "extract", no_argument, NULL, 'e' },
+		{ "keep", no_argument, NULL, 'k' },
+		{ NULL, 0, NULL, 0}
+	};
 
 #ifndef WIN32
 	signal(SIGPIPE, SIG_IGN);
 #endif
+
 	/* parse cmdline args */
-	for (i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--debug")) {
+	while ((c = getopt_long(argc, argv, "dhu:nvf:ek", longopts, NULL)) != -1) {
+		switch (c) {
+		case 'd':
 			idevice_set_debug_level(1);
-			continue;
-		}
-		else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
-			i++;
-			if (!argv[i] || !*argv[i]) {
-				print_usage(argc, argv);
-				return 0;
+			break;
+		case 'u':
+			if (!*optarg) {
+				fprintf(stderr, "ERROR: UDID argument must not be empty!\n");
+				print_usage(argc, argv, 1);
+				return 2;
 			}
-			udid = argv[i];
-			continue;
-		}
-		else if (!strcmp(argv[i], "-n") || !strcmp(argv[i], "--network")) {
+			udid = optarg;
+			break;
+		case 'n':
 			use_network = 1;
-			continue;
-		}
-		else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-			print_usage(argc, argv);
+			break;
+		case 'h':
+			print_usage(argc, argv, 0);
 			return 0;
-		}
-		else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
+		case 'v':
 			printf("%s %s\n", TOOL_NAME, PACKAGE_VERSION);
 			return 0;
-		}
-		else if (!strcmp(argv[i], "-e") || !strcmp(argv[i], "--extract")) {
+		case 'f':
+			if (!*optarg) {
+				fprintf(stderr, "ERROR: filter argument must not be empty!\n");
+				print_usage(argc, argv, 1);
+				return 2;
+			}
+			filename_filter = optarg;
+			break;
+		case 'e':
 			extract_raw_crash_reports = 1;
-			continue;
-		}
-		else if (!strcmp(argv[i], "-k") || !strcmp(argv[i], "--keep")) {
+			break;
+		case 'k':
 			keep_crash_reports = 1;
-			continue;
-		}
-		else if (target_directory == NULL) {
-			target_directory = argv[i];
-			continue;
-		}
-		else {
-			print_usage(argc, argv);
-			return 0;
+			break;
+		default:
+			print_usage(argc, argv, 1);
+			return 2;
 		}
 	}
+	argc -= optind;
+	argv += optind;
 
 	/* ensure a target directory was supplied */
-	if (!target_directory) {
-		print_usage(argc, argv);
-		return 0;
+	if (!argv[0]) {
+		fprintf(stderr, "ERROR: missing target directory.\n");
+		print_usage(argc+optind, argv-optind, 1);
+		return 2;
 	}
+	target_directory = argv[0];
 
 	/* check if target directory exists */
 	if (!file_exists(target_directory)) {
 		fprintf(stderr, "ERROR: Directory '%s' does not exist.\n", target_directory);
-		print_usage(argc, argv);
-		return 0;
+		return 1;
 	}
 
 	device_error = idevice_new_with_options(&device, udid, (use_network) ? IDEVICE_LOOKUP_NETWORK : IDEVICE_LOOKUP_USBMUX);
@@ -414,8 +446,9 @@ int main(int argc, char* argv[])
 
 	/* start crash log mover service */
 	lockdownd_service_descriptor_t service = NULL;
-	lockdownd_error = lockdownd_start_service(lockdownd, "com.apple.crashreportmover", &service);
+	lockdownd_error = lockdownd_start_service(lockdownd, CRASH_REPORT_MOVER_SERVICE, &service);
 	if (lockdownd_error != LOCKDOWN_E_SUCCESS) {
+		fprintf(stderr, "ERROR: Could not start service %s: %s\n", CRASH_REPORT_MOVER_SERVICE, lockdownd_strerror(lockdownd_error));
 		lockdownd_client_free(lockdownd);
 		idevice_free(device);
 		return -1;
@@ -442,10 +475,10 @@ int main(int argc, char* argv[])
 		if (service_error == SERVICE_E_SUCCESS || service_error == SERVICE_E_TIMEOUT) {
 			attempts++;
 			continue;
-		} else {
-			fprintf(stderr, "ERROR: Crash logs could not be moved. Connection interrupted (%d).\n", service_error);
-			break;
 		}
+
+		fprintf(stderr, "ERROR: Crash logs could not be moved. Connection interrupted (%d).\n", service_error);
+		break;
 	}
 	service_client_free(svcmove);
 	free(ping);
@@ -457,8 +490,9 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
-	lockdownd_error = lockdownd_start_service(lockdownd, "com.apple.crashreportcopymobile", &service);
+	lockdownd_error = lockdownd_start_service(lockdownd, CRASH_REPORT_COPY_MOBILE_SERVICE, &service);
 	if (lockdownd_error != LOCKDOWN_E_SUCCESS) {
+		fprintf(stderr, "ERROR: Could not start service %s: %s\n", CRASH_REPORT_COPY_MOBILE_SERVICE, lockdownd_strerror(lockdownd_error));
 		lockdownd_client_free(lockdownd);
 		idevice_free(device);
 		return -1;
@@ -479,7 +513,7 @@ int main(int argc, char* argv[])
 	}
 
 	/* recursively copy crash reports from the device to a local directory */
-	if (afc_client_copy_and_remove_crash_reports(afc, ".", target_directory) < 0) {
+	if (afc_client_copy_and_remove_crash_reports(afc, ".", target_directory, filename_filter) < 0) {
 		fprintf(stderr, "ERROR: Failed to get crash reports from device.\n");
 		afc_client_free(afc);
 		idevice_free(device);

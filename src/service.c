@@ -24,8 +24,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "service.h"
 #include "idevice.h"
+#include "service.h"
 #include "common/debug.h"
 
 /**
@@ -91,11 +91,11 @@ LIBIMOBILEDEVICE_API service_error_t service_client_factory_start_service(idevic
 	}
 
 	lockdownd_service_descriptor_t service = NULL;
-	lockdownd_start_service(lckd, service_name, &service);
+	lockdownd_error_t lerr = lockdownd_start_service(lckd, service_name, &service);
 	lockdownd_client_free(lckd);
 
-	if (!service || service->port == 0) {
-		debug_info("Could not start service %s!", service_name);
+	if (lerr != LOCKDOWN_E_SUCCESS) {
+		debug_info("Could not start service %s: %s", service_name, lockdownd_strerror(lerr));
 		return SERVICE_E_START_SERVICE_ERROR;
 	}
 
@@ -198,3 +198,10 @@ LIBIMOBILEDEVICE_API service_error_t service_disable_bypass_ssl(service_client_t
 	return idevice_to_service_error(idevice_connection_disable_bypass_ssl(client->connection, sslBypass));
 }
 
+LIBIMOBILEDEVICE_API service_error_t service_get_connection(service_client_t client, idevice_connection_t *connection)
+{
+	if (!client || !client->connection || !connection)
+		return SERVICE_E_INVALID_ARG;
+	*connection = client->connection;
+	return SERVICE_E_SUCCESS;
+}

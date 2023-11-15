@@ -27,6 +27,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "idevice.h"
 #include "mobilebackup.h"
 #include "device_link_service.h"
 #include "common/debug.h"
@@ -34,7 +35,7 @@
 #define MBACKUP_VERSION_INT1 100
 #define MBACKUP_VERSION_INT2 0
 
-#define IS_FLAG_SET(x, y) ((x & y) == y)
+#define IS_FLAG_SET(x, y) (((x) & (y)) == (y))
 
 /**
  * Convert an device_link_service_error_t value to an mobilebackup_error_t value.
@@ -279,7 +280,15 @@ LIBIMOBILEDEVICE_API mobilebackup_error_t mobilebackup_request_backup(mobileback
 		char *str = NULL;
 		plist_get_string_val(node, &str);
 		if (str) {
-			if (strcmp(str, proto_version) != 0) {
+			int maj = 0;
+			int min = 0;
+			sscanf(str, "%u.%u", &maj, &min);
+			uint32_t this_ver = ((maj & 0xFF) << 8) | (min & 0xFF);
+			maj = 0;
+			min = 0;
+			sscanf(proto_version, "%u.%u", &maj, &min);
+			uint32_t proto_ver = ((maj & 0xFF) << 8) | (min & 0xFF);
+			if (this_ver > proto_ver) {
 				err = MOBILEBACKUP_E_BAD_VERSION;
 			}
 			free(str);
@@ -346,7 +355,15 @@ LIBIMOBILEDEVICE_API mobilebackup_error_t mobilebackup_request_restore(mobilebac
 		char *str = NULL;
 		plist_get_string_val(node, &str);
 		if (str) {
-			if (strcmp(str, proto_version) != 0) {
+			int maj = 0;
+			int min = 0;
+			sscanf(str, "%u.%u", &maj, &min);
+			uint32_t this_ver = ((maj & 0xFF) << 8) | (min & 0xFF);
+			maj = 0;
+			min = 0;
+			sscanf(proto_version, "%u.%u", &maj, &min);
+			uint32_t proto_ver = ((maj & 0xFF) << 8) | (min & 0xFF);
+			if (this_ver > proto_ver) {
 				err = MOBILEBACKUP_E_BAD_VERSION;
 			}
 			free(str);

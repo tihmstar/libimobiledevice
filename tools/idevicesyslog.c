@@ -41,10 +41,10 @@
 
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/syslog_relay.h>
+#include <libimobiledevice-glue/termcolors.h>
 
 static int quit_flag = 0;
 static int exit_on_disconnect = 0;
-static int use_colors = 0;
 static int show_device_name = 0;
 
 static char* udid = NULL;
@@ -74,58 +74,6 @@ static int use_network = 0;
 static char *line = NULL;
 static int line_buffer_size = 0;
 static int lp = 0;
-
-#ifdef WIN32
-static WORD COLOR_RESET = 0;
-static HANDLE h_stdout = INVALID_HANDLE_VALUE;
-
-#define COLOR_NORMAL        COLOR_RESET
-#define COLOR_DARK          FOREGROUND_INTENSITY
-#define COLOR_RED           FOREGROUND_RED |FOREGROUND_INTENSITY
-#define COLOR_DARK_RED      FOREGROUND_RED
-#define COLOR_GREEN         FOREGROUND_GREEN | FOREGROUND_INTENSITY
-#define COLOR_DARK_GREEN    FOREGROUND_GREEN
-#define COLOR_YELLOW        FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY
-#define COLOR_DARK_YELLOW   FOREGROUND_GREEN | FOREGROUND_RED
-#define COLOR_BLUE          FOREGROUND_BLUE | FOREGROUND_INTENSITY
-#define COLOR_DARK_BLUE     FOREGROUND_BLUE
-#define COLOR_MAGENTA       FOREGROUND_BLUE | FOREGROUND_RED | FOREGROUND_INTENSITY
-#define COLOR_DARK_MAGENTA  FOREGROUND_BLUE | FOREGROUND_RED
-#define COLOR_CYAN          FOREGROUND_BLUE | FOREGROUND_GREEN
-#define COLOR_BRIGHT_CYAN   FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_INTENSITY
-#define COLOR_DARK_CYAN     FOREGROUND_BLUE | FOREGROUND_GREEN
-#define COLOR_WHITE         FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY
-#define COLOR_DARK_WHITE    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE
-
-static void TEXT_COLOR(WORD attr)
-{
-	if (use_colors) {
-		SetConsoleTextAttribute(h_stdout, attr);
-	}
-}
-#else
-
-#define COLOR_RESET         "\e[m"
-#define COLOR_NORMAL        "\e[0m"
-#define COLOR_DARK          "\e[2m"
-#define COLOR_RED           "\e[0;31m"
-#define COLOR_DARK_RED      "\e[2;31m"
-#define COLOR_GREEN         "\e[0;32m"
-#define COLOR_DARK_GREEN    "\e[2;32m"
-#define COLOR_YELLOW        "\e[0;33m"
-#define COLOR_DARK_YELLOW   "\e[2;33m"
-#define COLOR_BLUE          "\e[0;34m"
-#define COLOR_DARK_BLUE     "\e[2;34m"
-#define COLOR_MAGENTA       "\e[0;35m"
-#define COLOR_DARK_MAGENTA  "\e[2;35m"
-#define COLOR_CYAN          "\e[0;36m"
-#define COLOR_BRIGHT_CYAN   "\e[1;36m"
-#define COLOR_DARK_CYAN     "\e[2;36m"
-#define COLOR_WHITE         "\e[1;37m"
-#define COLOR_DARK_WHITE    "\e[0;37m"
-
-#define TEXT_COLOR(x) if (use_colors) { fwrite(x, 1, sizeof(x)-1, stdout); }
-#endif
 
 static void add_filter(const char* filterstr)
 {
@@ -171,7 +119,7 @@ static void add_filter(const char* filterstr)
 	}
 }
 
-static int find_char(char c, char** p, char* end)
+static int find_char(char c, char** p, const char* end)
 {
 	while ((**p != c) && (*p < end)) {
 		(*p)++;
@@ -201,9 +149,11 @@ static void syslog_callback(char c, void *user_data)
 		do {
 			if (lp < 16) {
 				shall_print = 1;
-				TEXT_COLOR(COLOR_WHITE);
+				cprintf(FG_WHITE);
 				break;
-			} else if (line[3] == ' ' && line[6] == ' ' && line[15] == ' ') {
+			}
+
+			if (line[3] == ' ' && line[6] == ' ' && line[15] == ' ') {
 				char* end = &line[lp];
 				char* p = &line[16];
 
@@ -242,10 +192,9 @@ static void syslog_callback(char c, void *user_data)
 					if (!found) {
 						shall_print = 0;
 						break;
-					} else {
-						triggered = 1;
-						shall_print = 1;
 					}
+					triggered = 1;
+					shall_print = 1;
 				} else if (num_trigger_filters == 0 && num_untrigger_filters > 0 && !triggered) {
 					shall_print = 0;
 					quit_flag++;
@@ -265,9 +214,8 @@ static void syslog_callback(char c, void *user_data)
 					if (!found) {
 						shall_print = 0;
 						break;
-					} else {
-						shall_print = 1;
 					}
+					shall_print = 1;
 				}
 
 				/* process name */
@@ -331,46 +279,42 @@ static void syslog_callback(char c, void *user_data)
 				/* log level */
 				char* level_start = p;
 				char* level_end = p;
-#ifdef WIN32
-				WORD level_color = COLOR_NORMAL;
-#else
 				const char* level_color = NULL;
-#endif
 				if (!strncmp(p, "<Notice>:", 9)) {
 					level_end += 9;
-					level_color = COLOR_GREEN;
+					level_color = FG_GREEN;
 				} else if (!strncmp(p, "<Error>:", 8)) {
 					level_end += 8;
-					level_color = COLOR_RED;
+					level_color = FG_RED;
 				} else if (!strncmp(p, "<Warning>:", 10)) {
 					level_end += 10;
-					level_color = COLOR_YELLOW;
+					level_color = FG_YELLOW;
 				} else if (!strncmp(p, "<Debug>:", 8)) {
 					level_end += 8;
-					level_color = COLOR_MAGENTA;
+					level_color = FG_MAGENTA;
 				} else {
-					level_color = COLOR_WHITE;
+					level_color = FG_WHITE;
 				}
 
 				/* write date and time */
-				TEXT_COLOR(COLOR_DARK_WHITE);
+				cprintf(FG_LIGHT_GRAY);
 				fwrite(line, 1, 16, stdout);
 
 				if (show_device_name) {
 					/* write device name */
-					TEXT_COLOR(COLOR_DARK_YELLOW);
+					cprintf(FG_DARK_YELLOW);
 					fwrite(device_name_start, 1, device_name_end-device_name_start+1, stdout);
-					TEXT_COLOR(COLOR_RESET);
+					cprintf(COLOR_RESET);
 				}
 
 				/* write process name */
-				TEXT_COLOR(COLOR_BRIGHT_CYAN);
+				cprintf(FG_BRIGHT_CYAN);
 				fwrite(process_name_start, 1, process_name_end-process_name_start, stdout);
-				TEXT_COLOR(COLOR_CYAN);
+				cprintf(FG_CYAN);
 				fwrite(process_name_end, 1, proc_name_end-process_name_end+1, stdout);
 
 				/* write log level */
-				TEXT_COLOR(level_color);
+				cprintf(level_color);
 				if (level_end > level_start) {
 					fwrite(level_start, 1, level_end-level_start, stdout);
 					p = level_end;
@@ -379,17 +323,17 @@ static void syslog_callback(char c, void *user_data)
 				lp -= p - linep;
 				linep = p;
 
-				TEXT_COLOR(COLOR_WHITE);
+				cprintf(FG_WHITE);
 
 			} else {
 				shall_print = 1;
-				TEXT_COLOR(COLOR_WHITE);
+				cprintf(FG_WHITE);
 			}
 		} while (0);
 
 		if ((num_msg_filters == 0 && num_proc_filters == 0 && num_pid_filters == 0 && num_trigger_filters == 0 && num_untrigger_filters == 0) || shall_print) {
 			fwrite(linep, 1, lp, stdout);
-			TEXT_COLOR(COLOR_RESET);
+			cprintf(COLOR_RESET);
 			fflush(stdout);
 			if (trigger_off) {
 				triggered = 0;
@@ -486,7 +430,8 @@ static void device_event_cb(const idevice_event_t* event, void* userdata)
 {
 	if (use_network && event->conn_type != CONNECTION_NETWORK) {
 		return;
-	} else if (!use_network && event->conn_type != CONNECTION_USBMUXD) {
+	}
+	if (!use_network && event->conn_type != CONNECTION_USBMUXD) {
 		return;
 	}
 	if (event->event == IDEVICE_DEVICE_ADD) {
@@ -522,37 +467,36 @@ static void clean_exit(int sig)
 
 static void print_usage(int argc, char **argv, int is_error)
 {
-	char *name = NULL;
-	name = strrchr(argv[0], '/');
+	char *name = strrchr(argv[0], '/');
 	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS]\n", (name ? name + 1: argv[0]));
 	fprintf(is_error ? stderr : stdout,
-		"\n" \
-		"Relay syslog of a connected device.\n" \
-		"\n" \
-		"OPTIONS:\n" \
-		"  -u, --udid UDID  target specific device by UDID\n" \
-		"  -n, --network    connect to network device\n" \
-		"  -x, --exit       exit when device disconnects\n" \
-		"  -h, --help       prints usage information\n" \
-		"  -d, --debug      enable communication debugging\n" \
-		"  -v, --version    prints version information\n" \
-		" --no-colors       disable colored output\n" \
-		"\n" \
-		"FILTER OPTIONS:\n" \
-		"  -m, --match STRING      only print messages that contain STRING\n" \
-		"  -t, --trigger STRING    start logging when matching STRING\n" \
-		"  -T, --untrigger STRING  stop logging when matching STRING\n" \
-		"  -p, --process PROCESS   only print messages from matching process(es)\n" \
-		"  -e, --exclude PROCESS   print all messages except matching process(es)\n" \
-		"                          PROCESS is a process name or multiple process names\n" \
-		"                          separated by \"|\".\n" \
-		"  -q, --quiet             set a filter to exclude common noisy processes\n" \
-		"  --quiet-list            prints the list of processes for --quiet and exits\n" \
-		"  -k, --kernel            only print kernel messages\n" \
-		"  -K, --no-kernel         suppress kernel messages\n" \
-		"\n" \
-		"For filter examples consult idevicesyslog(1) man page.\n" \
-		"\n" \
+		"\n"
+		"Relay syslog of a connected device.\n"
+		"\n"
+		"OPTIONS:\n"
+		"  -u, --udid UDID       target specific device by UDID\n"
+		"  -n, --network         connect to network device\n"
+		"  -x, --exit            exit when device disconnects\n"
+		"  -h, --help            prints usage information\n"
+		"  -d, --debug           enable communication debugging\n"
+		"  -v, --version         prints version information\n"
+		" --no-colors            disable colored output\n"
+		"\n"
+		"FILTER OPTIONS:\n"
+		"  -m, --match STRING      only print messages that contain STRING\n"
+		"  -t, --trigger STRING    start logging when matching STRING\n"
+		"  -T, --untrigger STRING  stop logging when matching STRING\n"
+		"  -p, --process PROCESS   only print messages from matching process(es)\n"
+		"  -e, --exclude PROCESS   print all messages except matching process(es)\n"
+		"                          PROCESS is a process name or multiple process names\n"
+		"                          separated by \"|\".\n"
+		"  -q, --quiet             set a filter to exclude common noisy processes\n"
+		"  --quiet-list            prints the list of processes for --quiet and exits\n"
+		"  -k, --kernel            only print kernel messages\n"
+		"  -K, --no-kernel         suppress kernel messages\n"
+		"\n"
+		"For filter examples consult idevicesyslog(1) man page.\n"
+		"\n"
 		"Homepage:    <" PACKAGE_URL ">\n"
 		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
 	);
@@ -560,14 +504,6 @@ static void print_usage(int argc, char **argv, int is_error)
 
 int main(int argc, char *argv[])
 {
-#ifdef WIN32
-	CONSOLE_SCREEN_BUFFER_INFO csbi;
-	h_stdout = GetStdHandle(STD_OUTPUT_HANDLE);
-	if (GetConsoleScreenBufferInfo(h_stdout, &csbi)) {
-		COLOR_RESET = csbi.wAttributes;
-	}
-#endif
-	int no_colors = 0;
 	int include_filter = 0;
 	int exclude_filter = 0;
 	int include_kernel = 0;
@@ -700,7 +636,7 @@ int main(int argc, char *argv[])
 			return 0;
 		}
 		case 2:
-			no_colors = 1;
+			term_colors_set_enabled(0);
 			break;
 		case 'v':
 			printf("%s %s\n", TOOL_NAME, PACKAGE_VERSION);
@@ -721,7 +657,8 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "ERROR: -p and -e/-q cannot be used together.\n");
 		print_usage(argc, argv, 1);
 		return 2;
-	} else if (include_filter > 0 && exclude_kernel > 0) {
+	}
+	if (include_filter > 0 && exclude_kernel > 0) {
 		fprintf(stderr, "ERROR: -p and -K cannot be used together.\n");
 		print_usage(argc, argv, 1);
 		return 2;
@@ -756,10 +693,6 @@ int main(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
-	if (!no_colors && isatty(1)) {
-		use_colors = 1;
-	}
-
 	int num = 0;
 	idevice_info_t *devices = NULL;
 	idevice_get_device_list_extended(&devices, &num);
@@ -768,20 +701,21 @@ int main(int argc, char *argv[])
 		if (!udid) {
 			fprintf(stderr, "No device found. Plug in a device or pass UDID with -u to wait for device to be available.\n");
 			return -1;
-		} else {
-			fprintf(stderr, "Waiting for device with UDID %s to become available...\n", udid);
 		}
+
+		fprintf(stderr, "Waiting for device with UDID %s to become available...\n", udid);
 	}
 
 	line_buffer_size = 1024;
 	line = malloc(line_buffer_size);
 
-	idevice_event_subscribe(device_event_cb, NULL);
+	idevice_subscription_context_t context = NULL;
+	idevice_events_subscribe(&context, device_event_cb, NULL);
 
 	while (!quit_flag) {
 		sleep(1);
 	}
-	idevice_event_unsubscribe();
+	idevice_events_unsubscribe(context);
 	stop_logging();
 
 	if (num_proc_filters > 0) {

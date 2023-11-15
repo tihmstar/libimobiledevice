@@ -29,8 +29,8 @@
 #include <unistd.h>
 #include <string.h>
 
-#include "afc.h"
 #include "idevice.h"
+#include "afc.h"
 #include "common/debug.h"
 #include "endianness.h"
 
@@ -213,7 +213,8 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 	uint32_t this_len = 0;
 	uint32_t current_count = 0;
 	uint64_t param1 = -1;
-	char* dump_here = NULL;
+	char *buf = NULL;
+	uint32_t recv_len = 0;
 
 	if (bytes_recv) {
 		*bytes_recv = 0;
@@ -223,18 +224,20 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 	}
 
 	/* first, read the AFC header */
-	service_receive(client->parent, (char*)&header, sizeof(AFCPacket), bytes_recv);
+	service_receive(client->parent, (char*)&header, sizeof(AFCPacket), &recv_len);
 	AFCPacket_from_LE(&header);
-	if (*bytes_recv == 0) {
+	if (recv_len == 0) {
 		debug_info("Just didn't get enough.");
 		return AFC_E_MUX_ERROR;
-	} else if (*bytes_recv < sizeof(AFCPacket)) {
+	}
+
+	if (recv_len < sizeof(AFCPacket)) {
 		debug_info("Did not even get the AFCPacket header");
 		return AFC_E_MUX_ERROR;
 	}
 
 	/* check if it's a valid AFC header */
-	if (strncmp(header.magic, AFC_MAGIC, AFC_MAGIC_LEN)) {
+	if (strncmp(header.magic, AFC_MAGIC, AFC_MAGIC_LEN) != 0) {
 		debug_info("Invalid AFC packet received (magic != " AFC_MAGIC ")!");
 	}
 
@@ -249,15 +252,14 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 	if (header.this_length < sizeof(AFCPacket)) {
 		debug_info("Invalid AFCPacket header received!");
 		return AFC_E_OP_HEADER_INVALID;
-	} else if ((header.this_length == header.entire_length)
-			&& header.entire_length == sizeof(AFCPacket)) {
+	}
+	if ((header.this_length == header.entire_length)
+		&& header.entire_length == sizeof(AFCPacket)) {
 		debug_info("Empty AFCPacket received!");
-		*bytes_recv = 0;
 		if (header.operation == AFC_OP_DATA) {
 			return AFC_E_SUCCESS;
-		} else {
-			return AFC_E_IO_ERROR;
 		}
+		return AFC_E_IO_ERROR;
 	}
 
 	debug_info("received AFC packet, full len=%lld, this len=%lld, operation=0x%llx", header.entire_length, header.this_length, header.operation);
@@ -265,15 +267,17 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 	entire_len = (uint32_t)header.entire_length - sizeof(AFCPacket);
 	this_len = (uint32_t)header.this_length - sizeof(AFCPacket);
 
-	dump_here = (char*)malloc(entire_len);
+	buf = (char*)malloc(entire_len);
 	if (this_len > 0) {
-		service_receive(client->parent, dump_here, this_len, bytes_recv);
-		if (*bytes_recv <= 0) {
-			free(dump_here);
+		recv_len = 0;
+		service_receive(client->parent, buf, this_len, &recv_len);
+		if (recv_len <= 0) {
+			free(buf);
 			debug_info("Did not get packet contents!");
 			return AFC_E_NOT_ENOUGH_DATA;
-		} else if (*bytes_recv < this_len) {
-			free(dump_here);
+		}
+		if (recv_len < this_len) {
+			free(buf);
 			debug_info("Could not receive this_len=%d bytes", this_len);
 			return AFC_E_NOT_ENOUGH_DATA;
 		}
@@ -283,12 +287,13 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 
 	if (entire_len > this_len) {
 		while (current_count < entire_len) {
-			service_receive(client->parent, dump_here+current_count, entire_len - current_count, bytes_recv);
-			if (*bytes_recv <= 0) {
-				debug_info("Error receiving data (recv returned %d)", *bytes_recv);
+			recv_len = 0;
+			service_receive(client->parent, buf+current_count, entire_len - current_count, &recv_len);
+			if (recv_len <= 0) {
+				debug_info("Error receiving data (recv returned %d)", recv_len);
 				break;
 			}
-			current_count += *bytes_recv;
+			current_count += recv_len;
 		}
 		if (current_count < entire_len) {
 			debug_info("WARNING: could not receive full packet (read %s, size %d)", current_count, entire_len);
@@ -296,16 +301,16 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 	}
 
 	if (current_count >= sizeof(uint64_t)) {
-		param1 = le64toh(*(uint64_t*)(dump_here));
+		param1 = le64toh(*(uint64_t*)(buf));
 	}
 
 	debug_info("packet data size = %i", current_count);
 	if (current_count > 256) {
 		debug_info("packet data follows (256/%u)", current_count);
-		debug_buffer(dump_here, 256);
+		debug_buffer(buf, 256);
 	} else {
 		debug_info("packet data follows");
-		debug_buffer(dump_here, current_count);
+		debug_buffer(buf, current_count);
 	}
 
 	/* check operation types */
@@ -316,7 +321,7 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 		if (param1 != AFC_E_SUCCESS) {
 			/* error status */
 			/* free buffer */
-			free(dump_here);
+			free(buf);
 			return (afc_error_t)param1;
 		}
 	} else if (header.operation == AFC_OP_DATA) {
@@ -330,8 +335,7 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 		debug_info("got a tell response, position=%lld", param1);
 	} else {
 		/* unknown operation code received */
-		free(dump_here);
-		*bytes_recv = 0;
+		free(buf);
 
 		debug_info("WARNING: Unknown operation code received 0x%llx param1=%lld", header.operation, param1);
 #ifndef WIN32
@@ -342,9 +346,9 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 	}
 
 	if (bytes) {
-		*bytes = dump_here;
+		*bytes = buf;
 	} else {
-		free(dump_here);
+		free(buf);
 	}
 
 	*bytes_recv = current_count;
@@ -354,7 +358,7 @@ static afc_error_t afc_receive_data(afc_client_t client, char **bytes, uint32_t 
 /**
  * Returns counts of null characters within a string.
  */
-static uint32_t count_nullspaces(char *string, uint32_t number)
+static uint32_t count_nullspaces(const char *string, uint32_t number)
 {
 	uint32_t i = 0, nulls = 0;
 
@@ -748,22 +752,23 @@ LIBIMOBILEDEVICE_API afc_error_t afc_file_read(afc_client_t client, uint64_t han
 	if (ret != AFC_E_SUCCESS) {
 		afc_unlock(client);
 		return ret;
-	} else if (bytes_loc == 0) {
+	}
+	if (bytes_loc == 0) {
 		if (input)
 			free(input);
 		afc_unlock(client);
 		*bytes_read = current_count;
 		/* FIXME: check that's actually a success */
 		return ret;
-	} else {
-		if (input) {
-			debug_info("%d", bytes_loc);
-			memcpy(data + current_count, input, (bytes_loc > length) ? length : bytes_loc);
-			free(input);
-			input = NULL;
-			current_count += (bytes_loc > length) ? length : bytes_loc;
-		}
 	}
+	if (input) {
+		debug_info("%d", bytes_loc);
+		memcpy(data + current_count, input, (bytes_loc > length) ? length : bytes_loc);
+		free(input);
+		input = NULL;
+		current_count += (bytes_loc > length) ? length : bytes_loc;
+	}
+
 	afc_unlock(client);
 	*bytes_read = current_count;
 	return ret;
@@ -798,7 +803,7 @@ LIBIMOBILEDEVICE_API afc_error_t afc_file_write(afc_client_t client, uint64_t ha
 	ret = afc_receive_data(client, NULL, &bytes_loc);
 	afc_unlock(client);
 	if (ret != AFC_E_SUCCESS) {
-		debug_info("uh oh?");
+		debug_info("Failed to receive reply (%d)", ret);
 	}
 	*bytes_written = current_count;
 	return ret;
@@ -1009,7 +1014,6 @@ LIBIMOBILEDEVICE_API afc_error_t afc_make_link(afc_client_t client, afc_link_typ
 		return AFC_E_INVALID_ARG;
 
 	uint32_t bytes = 0;
-	uint64_t type = htole64(linktype);
 	afc_error_t ret = AFC_E_UNKNOWN_ERROR;
 
 	size_t target_len = strlen(target);
@@ -1024,7 +1028,7 @@ LIBIMOBILEDEVICE_API afc_error_t afc_make_link(afc_client_t client, afc_link_typ
 		return AFC_E_NO_MEM;
 	}
 
-	debug_info("link type: %lld", type);
+	debug_info("link type: %lld", htole64(linktype));
 	debug_info("target: %s, length:%d", target, target_len);
 	debug_info("linkname: %s, length:%d", linkname, link_len);
 

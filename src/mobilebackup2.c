@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "idevice.h"
 #include "mobilebackup2.h"
 #include "device_link_service.h"
 #include "common/debug.h"
@@ -33,7 +34,7 @@
 #define MBACKUP2_VERSION_INT1 400
 #define MBACKUP2_VERSION_INT2 0
 
-#define IS_FLAG_SET(x, y) ((x & y) == y)
+#define IS_FLAG_SET(x, y) (((x) & (y)) == (y))
 
 /**
  * Convert an device_link_service_error_t value to an mobilebackup2_error_t value.
@@ -240,9 +241,8 @@ LIBIMOBILEDEVICE_API mobilebackup2_error_t mobilebackup2_send_raw(mobilebackup2_
 	if (sent > 0) {
 		*bytes = sent;
 		return MOBILEBACKUP2_E_SUCCESS;
-	} else {
-		return MOBILEBACKUP2_E_MUX_ERROR;
 	}
+	return MOBILEBACKUP2_E_MUX_ERROR;
 }
 
 LIBIMOBILEDEVICE_API mobilebackup2_error_t mobilebackup2_receive_raw(mobilebackup2_client_t client, char *data, uint32_t length, uint32_t *bytes)
@@ -265,11 +265,11 @@ LIBIMOBILEDEVICE_API mobilebackup2_error_t mobilebackup2_receive_raw(mobilebacku
 	if (received > 0) {
 		*bytes = received;
 		return MOBILEBACKUP2_E_SUCCESS;
-	} else if (received == 0) {
-		return MOBILEBACKUP2_E_SUCCESS;
-	} else {
-		return MOBILEBACKUP2_E_MUX_ERROR;
 	}
+	if (received == 0) {
+		return MOBILEBACKUP2_E_SUCCESS;
+	}
+	return MOBILEBACKUP2_E_MUX_ERROR;
 }
 
 LIBIMOBILEDEVICE_API mobilebackup2_error_t mobilebackup2_version_exchange(mobilebackup2_client_t client, double local_versions[], char count, double *remote_version)

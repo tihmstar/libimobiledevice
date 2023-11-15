@@ -2,7 +2,7 @@
  * idevicebackup2.c
  * Command line interface to use the device's backup and restore service
  *
- * Copyright (c) 2010-2019 Nikias Bassen, All Rights Reserved.
+ * Copyright (c) 2010-2022 Nikias Bassen, All Rights Reserved.
  * Copyright (c) 2009-2010 Martin Szulecki, All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -36,6 +36,7 @@
 #include <libgen.h>
 #include <ctype.h>
 #include <time.h>
+#include <getopt.h>
 
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/lockdown.h>
@@ -45,7 +46,8 @@
 #include <libimobiledevice/installation_proxy.h>
 #include <libimobiledevice/sbservices.h>
 #include <libimobiledevice/diagnostics_relay.h>
-#include "common/utils.h"
+#include <libimobiledevice-glue/utils.h>
+#include <plist/plist.h>
 
 #include <endianness.h>
 
@@ -183,9 +185,8 @@ static int mkdir_with_parents(const char *dir, int mode)
 	if (!dir) return -1;
 	if (__mkdir(dir, mode) == 0) {
 		return 0;
-	} else {
-		if (errno == EEXIST) return 0;
 	}
+	if (errno == EEXIST) return 0;
 	int res;
 	char *parent = strdup(dir);
 	char *parentdir = dirname(parent);
@@ -606,7 +607,7 @@ static int mb2_status_check_snapshot_state(const char *path, const char *udid, c
 	plist_t status_plist = NULL;
 	char *file_path = string_build_path(path, udid, "Status.plist", NULL);
 
-	plist_read_from_filename(&status_plist, file_path);
+	plist_read_from_file(file_path, &status_plist, NULL);
 	free(file_path);
 	if (!status_plist) {
 		printf("Could not read Status.plist!\n");
@@ -638,15 +639,15 @@ static void do_post_notification(idevice_t device, const char *notification)
 		return;
 	}
 
-	lockdownd_start_service(lockdown, NP_SERVICE_NAME, &service);
-	if (service && service->port) {
+	lockdownd_error_t ldret = lockdownd_start_service(lockdown, NP_SERVICE_NAME, &service);
+	if (ldret == LOCKDOWN_E_SUCCESS) {
 		np_client_new(device, service, &np);
 		if (np) {
 			np_post_notification(np, notification);
 			np_client_free(np);
 		}
 	} else {
-		printf("Could not start %s\n", NP_SERVICE_NAME);
+		printf("ERROR: Could not start service %s: %s\n", NP_SERVICE_NAME, lockdownd_strerror(ldret));
 	}
 
 	if (service) {
@@ -972,10 +973,12 @@ static int mb2_receive_filename(mobilebackup2_client_t mobilebackup2, char** fil
 		if ((nlen == 0) && (rlen == 4)) {
 			// a zero length means no more files to receive
 			return 0;
-		} else if(rlen == 0) {
+		}
+		if (rlen == 0) {
 			// device needs more time, waiting...
 			continue;
-		} else if (nlen > 4096) {
+		}
+		if (nlen > 4096) {
 			// filename length is too large
 			printf("ERROR: %s: too large filename length (%d)!\n", __func__, nlen);
 			return 0;
@@ -1367,7 +1370,8 @@ static void get_hidden_input(char *buf, int maxlen)
 	while ((c = my_getch())) {
 		if ((c == '\r') || (c == '\n')) {
 			break;
-		} else if (isprint(c)) {
+		}
+		if (isprint(c)) {
 			if (pwlen < maxlen-1)
 				buf[pwlen++] = c;
 			fputc('*', stderr);
@@ -1415,54 +1419,57 @@ static void clean_exit(int sig)
 	quit_flag++;
 }
 
-static void print_usage(int argc, char **argv)
+static void print_usage(int argc, char **argv, int is_error)
 {
-	char *name = NULL;
-	name = strrchr(argv[0], '/');
-	printf("Usage: %s [OPTIONS] CMD [CMDOPTIONS] DIRECTORY\n", (name ? name + 1: argv[0]));
-	printf("\n");
-	printf("Create or restore backup from the current or specified directory.\n");
-	printf("\n");
-	printf("CMD:\n");
-	printf("  backup\tcreate backup for the device\n");
-	printf("    --full\t\tforce full backup from device.\n");
-	printf("  restore\trestore last backup to the device\n");
-	printf("    --system\t\trestore system files, too.\n");
-	printf("    --no-reboot\t\tdo NOT reboot the device when done (default: yes).\n");
-	printf("    --copy\t\tcreate a copy of backup folder before restoring.\n");
-	printf("    --settings\t\trestore device settings from the backup.\n");
-	printf("    --remove\t\tremove items which are not being restored\n");
-	printf("    --skip-apps\t\tdo not trigger re-installation of apps after restore\n");
-	printf("    --password PWD\tsupply the password of the source backup\n");
-	printf("  info\t\tshow details about last completed backup of device\n");
-	printf("  list\t\tlist files of last completed backup in CSV format\n");
-	printf("  unback\tunpack a completed backup in DIRECTORY/_unback_/\n");
-	printf("  encryption on|off [PWD]\tenable or disable backup encryption\n");
-	printf("    NOTE: password will be requested in interactive mode if omitted\n");
-	printf("  changepw [OLD NEW]  change backup password on target device\n");
-	printf("    NOTE: passwords will be requested in interactive mode if omitted\n");
-	printf("  cloud on|off\tenable or disable cloud use (requires iCloud account)\n");
-	printf("\n");
-	printf("OPTIONS:\n");
-	printf("  -u, --udid UDID\ttarget specific device by UDID\n");
-	printf("  -s, --source UDID\tuse backup data from device specified by UDID\n");
-	printf("  -n, --network\t\tconnect to network device\n");
-	printf("  -i, --interactive\trequest passwords interactively\n");
-	printf("  -d, --debug\t\tenable communication debugging\n");
-	printf("  -h, --help\t\tprints usage information\n");
-	printf("  -v, --version\t\tprints version information\n");
-	printf("\n");
-	printf("Homepage:    <" PACKAGE_URL ">\n");
-	printf("Bug Reports: <" PACKAGE_BUGREPORT ">\n");
+	char *name = strrchr(argv[0], '/');
+	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS] CMD [CMDOPTIONS] DIRECTORY\n", (name ? name + 1: argv[0]));
+	fprintf(is_error ? stderr : stdout,
+		"\n"
+		"Create or restore backup in/from the specified directory.\n"
+		"\n"
+		"CMD:\n"
+		"  backup        create backup for the device\n"
+		"    --full              force full backup from device.\n"
+		"  restore       restore last backup to the device\n"
+		"    --system            restore system files, too.\n"
+		"    --no-reboot         do NOT reboot the device when done (default: yes).\n"
+		"    --copy              create a copy of backup folder before restoring.\n"
+		"    --settings          restore device settings from the backup.\n"
+		"    --remove            remove items which are not being restored\n"
+		"    --skip-apps         do not trigger re-installation of apps after restore\n"
+		"    --password PWD      supply the password for the encrypted source backup\n"
+		"  info          show details about last completed backup of device\n"
+		"  list          list files of last completed backup in CSV format\n"
+		"  unback        unpack a completed backup in DIRECTORY/_unback_/\n"
+		"  encryption on|off [PWD]       enable or disable backup encryption\n"
+		"  changepw [OLD NEW]    change backup password on target device\n"
+		"  cloud on|off          enable or disable cloud use (requires iCloud account)\n"
+		"\n"
+		"NOTE: Passwords will be requested in interactive mode (-i) if omitted, or can\n"
+		"be passed via environment variable BACKUP_PASSWORD/BACKUP_PASSWORD_NEW.\n"
+		"See man page for further details.\n"
+		"\n"
+		"OPTIONS:\n"
+		"  -u, --udid UDID       target specific device by UDID\n"
+		"  -s, --source UDID     use backup data from device specified by UDID\n"
+		"  -n, --network         connect to network device\n"
+		"  -i, --interactive     request passwords interactively\n"
+		"  -d, --debug           enable communication debugging\n"
+		"  -h, --help            prints usage information\n"
+		"  -v, --version         prints version information\n"
+		"\n"
+		"Homepage:    <" PACKAGE_URL ">\n"
+		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
+	);
 }
 
-#define DEVICE_VERSION(maj, min, patch) (((maj & 0xFF) << 16) | ((min & 0xFF) << 8) | (patch & 0xFF))
+#define DEVICE_VERSION(maj, min, patch) ((((maj) & 0xFF) << 16) | (((min) & 0xFF) << 8) | ((patch) & 0xFF))
 
 int main(int argc, char *argv[])
 {
 	idevice_error_t ret = IDEVICE_E_UNKNOWN_ERROR;
 	lockdownd_error_t ldret = LOCKDOWN_E_UNKNOWN_ERROR;
-	int i;
+	int i = 0;
 	char* udid = NULL;
 	char* source_udid = NULL;
 	int use_network = 0;
@@ -1479,7 +1486,46 @@ int main(int argc, char *argv[])
 	plist_t node_tmp = NULL;
 	plist_t info_plist = NULL;
 	plist_t opts = NULL;
+
+	idevice_t device = NULL;
+	afc_client_t afc = NULL;
+	np_client_t np = NULL;
+	lockdownd_client_t lockdown = NULL;
+	mobilebackup2_client_t mobilebackup2 = NULL;
 	mobilebackup2_error_t err;
+	uint64_t lockfile = 0;
+
+#define OPT_SYSTEM 1
+#define OPT_REBOOT 2
+#define OPT_NO_REBOOT 3
+#define OPT_COPY 4
+#define OPT_SETTINGS 5
+#define OPT_REMOVE 6
+#define OPT_SKIP_APPS 7
+#define OPT_PASSWORD 8
+#define OPT_FULL 9
+
+	int c = 0;
+	const struct option longopts[] = {
+		{ "debug", no_argument, NULL, 'd' },
+		{ "help", no_argument, NULL, 'h' },
+		{ "udid", required_argument, NULL, 'u' },
+		{ "source", required_argument, NULL, 's' },
+		{ "interactive", no_argument, NULL, 'i' },
+		{ "network", no_argument, NULL, 'n' },
+		{ "version", no_argument, NULL, 'v' },
+		// command options:
+		{ "system", no_argument, NULL, OPT_SYSTEM },
+		{ "reboot", no_argument, NULL, OPT_REBOOT },
+		{ "no-reboot", no_argument, NULL, OPT_NO_REBOOT },
+		{ "copy", no_argument, NULL, OPT_COPY },
+		{ "settings", no_argument, NULL, OPT_SETTINGS },
+		{ "remove", no_argument, NULL, OPT_REMOVE },
+		{ "skip-apps", no_argument, NULL, OPT_SKIP_APPS },
+		{ "password", required_argument, NULL, OPT_PASSWORD },
+		{ "full", no_argument, NULL, OPT_FULL },
+		{ NULL, 0, NULL, 0}
+	};
 
 	/* we need to exit cleanly on running backups and restores or we cause havok */
 	signal(SIGINT, clean_exit);
@@ -1490,206 +1536,196 @@ int main(int argc, char *argv[])
 #endif
 
 	/* parse cmdline args */
-	for (i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--debug")) {
+	while ((c = getopt_long(argc, argv, "dhu:s:inv", longopts, NULL)) != -1) {
+		switch (c) {
+		case 'd':
 			idevice_set_debug_level(1);
-			continue;
-		}
-		else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
-			i++;
-			if (!argv[i] || !*argv[i]) {
-				print_usage(argc, argv);
-				return -1;
+			break;
+		case 'u':
+			if (!*optarg) {
+				fprintf(stderr, "ERROR: UDID argument must not be empty!\n");
+				print_usage(argc, argv, 1);
+				return 2;
 			}
-			udid = strdup(argv[i]);
-			continue;
-		}
-		else if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--source")) {
-			i++;
-			if (!argv[i] || !*argv[i]) {
-				print_usage(argc, argv);
-				return -1;
+			udid = strdup(optarg);
+			break;
+		case 's':
+			if (!*optarg) {
+				fprintf(stderr, "ERROR: SOURCE argument must not be empty!\n");
+				print_usage(argc, argv, 1);
+				return 2;
 			}
-			source_udid = strdup(argv[i]);
-			continue;
-		}
-		else if (!strcmp(argv[i], "-n") || !strcmp(argv[i], "--network")) {
-			use_network = 1;
-			continue;
-		}
-		else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--interactive")) {
+			source_udid = strdup(optarg);
+			break;
+		case 'i':
 			interactive_mode = 1;
-			continue;
-		}
-		else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-			print_usage(argc, argv);
+			break;
+		case 'n':
+			use_network = 1;
+			break;
+		case 'h':
+			print_usage(argc, argv, 0);
 			return 0;
-		}
-		else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
+		case 'v':
 			printf("%s %s\n", TOOL_NAME, PACKAGE_VERSION);
 			return 0;
-		}
-		else if (!strcmp(argv[i], "backup")) {
-			cmd = CMD_BACKUP;
-		}
-		else if (!strcmp(argv[i], "restore")) {
-			cmd = CMD_RESTORE;
-		}
-		else if (!strcmp(argv[i], "--system")) {
+		case OPT_SYSTEM:
 			cmd_flags |= CMD_FLAG_RESTORE_SYSTEM_FILES;
-		}
-		else if (!strcmp(argv[i], "--reboot")) {
+			break;
+		case OPT_REBOOT:
 			cmd_flags &= ~CMD_FLAG_RESTORE_NO_REBOOT;
-		}
-		else if (!strcmp(argv[i], "--no-reboot")) {
+			break;
+		case OPT_NO_REBOOT:
 			cmd_flags |= CMD_FLAG_RESTORE_NO_REBOOT;
-		}
-		else if (!strcmp(argv[i], "--copy")) {
+			break;
+		case OPT_COPY:
 			cmd_flags |= CMD_FLAG_RESTORE_COPY_BACKUP;
-		}
-		else if (!strcmp(argv[i], "--settings")) {
+			break;
+		case OPT_SETTINGS:
 			cmd_flags |= CMD_FLAG_RESTORE_SETTINGS;
-		}
-		else if (!strcmp(argv[i], "--remove")) {
+			break;
+		case OPT_REMOVE:
 			cmd_flags |= CMD_FLAG_RESTORE_REMOVE_ITEMS;
-		}
-		else if (!strcmp(argv[i], "--skip-apps")) {
+			break;
+		case OPT_SKIP_APPS:
 			cmd_flags |= CMD_FLAG_RESTORE_SKIP_APPS;
-		}
-		else if (!strcmp(argv[i], "--password")) {
-			i++;
-			if (!argv[i]) {
-				print_usage(argc, argv);
-				return -1;
-			}
-			if (backup_password)
-				free(backup_password);
-			backup_password = strdup(argv[i]);
-			continue;
-		}
-		else if (!strcmp(argv[i], "cloud")) {
-			cmd = CMD_CLOUD;
-			i++;
-			if (!argv[i]) {
-				printf("No argument given for cloud command; requires either 'on' or 'off'.\n");
-				print_usage(argc, argv);
-				return -1;
-			}
-			if (!strcmp(argv[i], "on")) {
-				cmd_flags |= CMD_FLAG_CLOUD_ENABLE;
-			} else if (!strcmp(argv[i], "off")) {
-				cmd_flags |= CMD_FLAG_CLOUD_DISABLE;
-			} else {
-				printf("Invalid argument '%s' for cloud command; must be either 'on' or 'off'.\n", argv[i]);
-			}
-			continue;
-		}
-		else if (!strcmp(argv[i], "--full")) {
+			break;
+		case OPT_PASSWORD:
+			free(backup_password);
+			backup_password = strdup(optarg);
+			break;
+		case OPT_FULL:
 			cmd_flags |= CMD_FLAG_FORCE_FULL_BACKUP;
+			break;
+		default:
+			print_usage(argc, argv, 1);
+			return 2;
 		}
-		else if (!strcmp(argv[i], "info")) {
-			cmd = CMD_INFO;
-			verbose = 0;
+	}
+	argc -= optind;
+	argv += optind;
+
+	if (!argv[0]) {
+		fprintf(stderr, "ERROR: No command specified.\n");
+		print_usage(argc+optind, argv-optind, 1);
+		return 2;
+	}
+
+	if (!strcmp(argv[0], "backup")) {
+		cmd = CMD_BACKUP;
+	}
+	else if (!strcmp(argv[0], "restore")) {
+		cmd = CMD_RESTORE;
+	}
+	else if (!strcmp(argv[0], "cloud")) {
+		cmd = CMD_CLOUD;
+		i = 1;
+		if (!argv[i]) {
+			fprintf(stderr, "ERROR: No argument given for cloud command; requires either 'on' or 'off'.\n");
+			print_usage(argc+optind, argv-optind, 1);
+			return 2;
 		}
-		else if (!strcmp(argv[i], "list")) {
-			cmd = CMD_LIST;
-			verbose = 0;
+		if (!strcmp(argv[i], "on")) {
+			cmd_flags |= CMD_FLAG_CLOUD_ENABLE;
+		} else if (!strcmp(argv[i], "off")) {
+			cmd_flags |= CMD_FLAG_CLOUD_DISABLE;
+		} else {
+			fprintf(stderr, "ERROR: Invalid argument '%s' for cloud command; must be either 'on' or 'off'.\n", argv[i]);
+			print_usage(argc+optind, argv-optind, 1);
+			return 2;
 		}
-		else if (!strcmp(argv[i], "unback")) {
-			cmd = CMD_UNBACK;
+	}
+	else if (!strcmp(argv[0], "info")) {
+		cmd = CMD_INFO;
+		verbose = 0;
+	}
+	else if (!strcmp(argv[0], "list")) {
+		cmd = CMD_LIST;
+		verbose = 0;
+	}
+	else if (!strcmp(argv[0], "unback")) {
+		cmd = CMD_UNBACK;
+	}
+	else if (!strcmp(argv[0], "encryption")) {
+		cmd = CMD_CHANGEPW;
+		i = 1;
+		if (!argv[i]) {
+			fprintf(stderr, "ERROR: No argument given for encryption command; requires either 'on' or 'off'.\n");
+			print_usage(argc+optind, argv-optind, 1);
+			return 2;
 		}
-		else if (!strcmp(argv[i], "encryption")) {
-			cmd = CMD_CHANGEPW;
+		if (!strcmp(argv[i], "on")) {
+			cmd_flags |= CMD_FLAG_ENCRYPTION_ENABLE;
+		} else if (!strcmp(argv[i], "off")) {
+			cmd_flags |= CMD_FLAG_ENCRYPTION_DISABLE;
+		} else {
+			fprintf(stderr, "ERROR: Invalid argument '%s' for encryption command; must be either 'on' or 'off'.\n", argv[i]);
+			print_usage(argc+optind, argv-optind, 1);
+			return 2;
+		}
+		// check if a password was given on the command line
+		free(newpw);
+		newpw = NULL;
+		free(backup_password);
+		backup_password = NULL;
+		i++;
+		if (argv[i]) {
+			if (cmd_flags & CMD_FLAG_ENCRYPTION_ENABLE) {
+				newpw = strdup(argv[i]);
+			} else if (cmd_flags & CMD_FLAG_ENCRYPTION_DISABLE) {
+				backup_password = strdup(argv[i]);
+			}
+		}
+	}
+	else if (!strcmp(argv[0], "changepw")) {
+		cmd = CMD_CHANGEPW;
+		cmd_flags |= CMD_FLAG_ENCRYPTION_CHANGEPW;
+		// check if passwords were given on command line
+		free(newpw);
+		newpw = NULL;
+		free(backup_password);
+		backup_password = NULL;
+		i = 1;
+		if (argv[i]) {
+			backup_password = strdup(argv[i]);
 			i++;
 			if (!argv[i]) {
-				printf("No argument given for encryption command; requires either 'on' or 'off'.\n");
-				print_usage(argc, argv);
-				return -1;
+				fprintf(stderr, "ERROR: Old and new passwords have to be passed as arguments for the changepw command\n");
+				print_usage(argc+optind, argv-optind, 1);
+				return 2;
 			}
-			if (!strcmp(argv[i], "on")) {
-				cmd_flags |= CMD_FLAG_ENCRYPTION_ENABLE;
-			} else if (!strcmp(argv[i], "off")) {
-				cmd_flags |= CMD_FLAG_ENCRYPTION_DISABLE;
-			} else {
-				printf("Invalid argument '%s' for encryption command; must be either 'on' or 'off'.\n", argv[i]);
-			}
-			// check if a password was given on the command line
-			if (newpw) {
-				free(newpw);
-				newpw = NULL;
-			}
-			if (backup_password) {
-				free(backup_password);
-				backup_password = NULL;
-			}
-			i++;
-			if (argv[i]) {
-				if (cmd_flags & CMD_FLAG_ENCRYPTION_ENABLE) {
-					newpw = strdup(argv[i]);
-				} else if (cmd_flags & CMD_FLAG_ENCRYPTION_DISABLE) {
-					backup_password = strdup(argv[i]);
-				}
-			}
-			continue;
+			newpw = strdup(argv[i]);
 		}
-		else if (!strcmp(argv[i], "changepw")) {
-			cmd = CMD_CHANGEPW;
-			cmd_flags |= CMD_FLAG_ENCRYPTION_CHANGEPW;
-			// check if passwords were given on command line
-			if (newpw) {
-				free(newpw);
-				newpw = NULL;
-			}
-			if (backup_password) {
-				free(backup_password);
-				backup_password = NULL;
-			}
-			i++;
-			if (argv[i]) {
-				backup_password = strdup(argv[i]);
-				i++;
-				if (!argv[i]) {
-					printf("Old and new passwords have to be passed as arguments for the changepw command\n");
-					print_usage(argc, argv);
-					return -1;
-				}
-				newpw = strdup(argv[i]);
-			}
-			continue;
-		}
-		else if (backup_directory == NULL) {
-			backup_directory = argv[i];
-		}
-		else {
-			print_usage(argc, argv);
-			return -1;
-		}
+	}
+
+	i++;
+	if (argv[i]) {
+		backup_directory = argv[i];
 	}
 
 	/* verify options */
 	if (cmd == -1) {
-		printf("No command specified.\n");
-		print_usage(argc, argv);
-		return -1;
+		fprintf(stderr, "ERROR: Unsupported command '%s'.\n", argv[0]);
+		print_usage(argc+optind, argv-optind, 1);
+		return 2;
 	}
 
 	if (cmd == CMD_CHANGEPW || cmd == CMD_CLOUD) {
 		backup_directory = (char*)".this_folder_is_not_present_on_purpose";
 	} else {
 		if (backup_directory == NULL) {
-			printf("No target backup directory specified.\n");
-			print_usage(argc, argv);
-			return -1;
+			fprintf(stderr, "ERROR: No target backup directory specified.\n");
+			print_usage(argc+optind, argv-optind, 1);
+			return 2;
 		}
 
 		/* verify if passed backup directory exists */
 		if (stat(backup_directory, &st) != 0) {
-			printf("ERROR: Backup directory \"%s\" does not exist!\n", backup_directory);
+			fprintf(stderr, "ERROR: Backup directory \"%s\" does not exist!\n", backup_directory);
 			return -1;
 		}
 	}
 
-	idevice_t device = NULL;
 	ret = idevice_new_with_options(&device, udid, (use_network) ? IDEVICE_LOOKUP_NETWORK : IDEVICE_LOOKUP_USBMUX);
 	if (ret != IDEVICE_E_SUCCESS) {
 		if (udid) {
@@ -1711,6 +1747,20 @@ int main(int argc, char *argv[])
 	uint8_t is_encrypted = 0;
 	char *info_path = NULL;
 	if (cmd == CMD_CHANGEPW) {
+		if (!interactive_mode) {
+			if (!newpw) {
+				newpw = getenv("BACKUP_PASSWORD_NEW");
+				if (newpw) {
+					newpw = strdup(newpw);
+				}
+			}
+			if (!backup_password) {
+				backup_password = getenv("BACKUP_PASSWORD");
+				if (backup_password) {
+					backup_password = strdup(backup_password);
+				}
+			}
+		}
 		if (!interactive_mode && !backup_password && !newpw) {
 			idevice_free(device);
 			printf("ERROR: Can't get password input in non-interactive mode. Either pass password(s) on the command line, or enable interactive mode with -i or --interactive.\n");
@@ -1731,7 +1781,7 @@ int main(int argc, char *argv[])
 				free(info_path);
 			}
 			plist_t manifest_plist = NULL;
-			plist_read_from_filename(&manifest_plist, manifest_path);
+			plist_read_from_file(manifest_path, &manifest_plist, NULL);
 			if (!manifest_plist) {
 				idevice_free(device);
 				free(info_path);
@@ -1752,6 +1802,12 @@ int main(int argc, char *argv[])
 	if (cmd != CMD_CLOUD && is_encrypted) {
 		PRINT_VERBOSE(1, "This is an encrypted backup.\n");
 		if (backup_password == NULL) {
+			backup_password = getenv("BACKUP_PASSWORD");
+			if (backup_password) {
+				backup_password = strdup(backup_password);
+			}
+		}
+		if (backup_password == NULL) {
 			if (interactive_mode) {
 				backup_password = ask_for_password("Enter backup password", 0);
 			}
@@ -1770,7 +1826,6 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	lockdownd_client_t lockdown = NULL;
 	if (LOCKDOWN_E_SUCCESS != (ldret = lockdownd_client_new_with_handshake(device, &lockdown, TOOL_NAME))) {
 		printf("ERROR: Could not connect to lockdownd, error code %d\n", ldret);
 		idevice_free(device);
@@ -1808,7 +1863,6 @@ int main(int argc, char *argv[])
 	}
 
 	/* start notification_proxy */
-	np_client_t np = NULL;
 	ldret = lockdownd_start_service(lockdown, NP_SERVICE_NAME, &service);
 	if ((ldret == LOCKDOWN_E_SUCCESS) && service && service->port) {
 		np_client_new(device, service, &np);
@@ -1822,17 +1876,24 @@ int main(int argc, char *argv[])
 		};
 		np_observe_notifications(np, noties);
 	} else {
-		printf("ERROR: Could not start service %s.\n", NP_SERVICE_NAME);
+		printf("ERROR: Could not start service %s: %s\n", NP_SERVICE_NAME, lockdownd_strerror(ldret));
+		cmd = CMD_LEAVE;
+		goto checkpoint;
+	}
+	if (service) {
+		lockdownd_service_descriptor_free(service);
+		service = NULL;
 	}
 
-	afc_client_t afc = NULL;
 	if (cmd == CMD_BACKUP || cmd == CMD_RESTORE) {
 		/* start AFC, we need this for the lock file */
-		service->port = 0;
-		service->ssl_enabled = 0;
 		ldret = lockdownd_start_service(lockdown, AFC_SERVICE_NAME, &service);
 		if ((ldret == LOCKDOWN_E_SUCCESS) && service->port) {
 			afc_client_new(device, service, &afc);
+		} else {
+			printf("ERROR: Could not start service %s: %s\n", AFC_SERVICE_NAME, lockdownd_strerror(ldret));
+			cmd = CMD_LEAVE;
+			goto checkpoint;
 		}
 	}
 
@@ -1842,7 +1903,6 @@ int main(int argc, char *argv[])
 	}
 
 	/* start mobilebackup service and retrieve port */
-	mobilebackup2_client_t mobilebackup2 = NULL;
 	ldret = lockdownd_start_service_with_escrow_bag(lockdown, MOBILEBACKUP2_SERVICE_NAME, &service);
 	lockdownd_client_free(lockdown);
 	lockdown = NULL;
@@ -1877,7 +1937,7 @@ int main(int argc, char *argv[])
 		/* verify existing Info.plist */
 		if (info_path && (stat(info_path, &st) == 0) && cmd != CMD_CLOUD) {
 			PRINT_VERBOSE(1, "Reading Info.plist from backup.\n");
-			plist_read_from_filename(&info_plist, info_path);
+			plist_read_from_file(info_path, &info_plist, NULL);
 
 			if (!info_plist) {
 				printf("Could not read Info.plist\n");
@@ -1892,7 +1952,6 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		uint64_t lockfile = 0;
 		if (cmd == CMD_BACKUP || cmd == CMD_RESTORE) {
 			do_post_notification(device, NP_SYNC_WILL_START);
 			afc_file_open(afc, "/com.apple.itunes.lock_sync", AFC_FOPEN_RW, &lockfile);
@@ -1905,15 +1964,16 @@ int main(int argc, char *argv[])
 				if (aerr == AFC_E_SUCCESS) {
 					do_post_notification(device, NP_SYNC_DID_START);
 					break;
-				} else if (aerr == AFC_E_OP_WOULD_BLOCK) {
+				}
+				if (aerr == AFC_E_OP_WOULD_BLOCK) {
 					usleep(LOCK_WAIT);
 					continue;
-				} else {
-					fprintf(stderr, "ERROR: could not lock file! error code: %d\n", aerr);
-					afc_file_close(afc, lockfile);
-					lockfile = 0;
-					cmd = CMD_LEAVE;
 				}
+
+				fprintf(stderr, "ERROR: could not lock file! error code: %d\n", aerr);
+				afc_file_close(afc, lockfile);
+				lockfile = 0;
+				cmd = CMD_LEAVE;
 			}
 			if (i == LOCK_ATTEMPTS) {
 				fprintf(stderr, "ERROR: timeout while locking for sync\n");
@@ -1971,7 +2031,7 @@ checkpoint:
 				cmd = CMD_LEAVE;
 			}
 			remove_file(info_path);
-			plist_write_to_filename(info_plist, info_path, PLIST_FORMAT_XML);
+			plist_write_to_file(info_plist, info_path, PLIST_FORMAT_XML, 0);
 			free(info_path);
 
 			plist_free(info_plist);
@@ -2032,9 +2092,8 @@ checkpoint:
 			PRINT_VERBOSE(1, "Don't copy backup: %s\n", ((cmd_flags & CMD_FLAG_RESTORE_COPY_BACKUP) == 0 ? "Yes":"No"));
 			plist_dict_set_item(opts, "RestorePreserveSettings", plist_new_bool((cmd_flags & CMD_FLAG_RESTORE_SETTINGS) == 0));
 			PRINT_VERBOSE(1, "Preserve settings of device: %s\n", ((cmd_flags & CMD_FLAG_RESTORE_SETTINGS) == 0 ? "Yes":"No"));
-			if (cmd_flags & CMD_FLAG_RESTORE_REMOVE_ITEMS)
-				plist_dict_set_item(opts, "RemoveItemsNotRestored", plist_new_bool(1));
-				PRINT_VERBOSE(1, "Remove items that are not restored: %s\n", ((cmd_flags & CMD_FLAG_RESTORE_REMOVE_ITEMS) ? "Yes":"No"));
+			plist_dict_set_item(opts, "RemoveItemsNotRestored", plist_new_bool(cmd_flags & CMD_FLAG_RESTORE_REMOVE_ITEMS));
+			PRINT_VERBOSE(1, "Remove items that are not restored: %s\n", ((cmd_flags & CMD_FLAG_RESTORE_REMOVE_ITEMS) ? "Yes":"No"));
 			if (backup_password != NULL) {
 				plist_dict_set_item(opts, "Password", plist_new_string(backup_password));
 			}
@@ -2048,9 +2107,8 @@ checkpoint:
 				if (write_restore_applications(info_plist, afc) < 0) {
 					cmd = CMD_LEAVE;
 					break;
-				} else {
-					PRINT_VERBOSE(1, "Wrote RestoreApplications.plist\n");
 				}
+				PRINT_VERBOSE(1, "Wrote RestoreApplications.plist\n");
 			}
 
 			/* Start restore */
@@ -2105,6 +2163,12 @@ checkpoint:
 			if (cmd_flags & CMD_FLAG_ENCRYPTION_ENABLE) {
 				if (!willEncrypt) {
 					if (!newpw) {
+						newpw = getenv("BACKUP_PASSWORD");
+						if (newpw) {
+							newpw = strdup(newpw);
+						}
+					}
+					if (!newpw) {
 						newpw = ask_for_password("Enter new backup password", 1);
 					}
 					if (!newpw) {
@@ -2120,6 +2184,12 @@ checkpoint:
 				}
 			} else if (cmd_flags & CMD_FLAG_ENCRYPTION_DISABLE) {
 				if (willEncrypt) {
+					if (!backup_password) {
+						backup_password = getenv("BACKUP_PASSWORD");
+						if (backup_password) {
+							backup_password = strdup(backup_password);
+						}
+					}
 					if (!backup_password) {
 						backup_password = ask_for_password("Enter current backup password", 0);
 					}
@@ -2444,7 +2514,7 @@ checkpoint:
 
 				/* print status */
 				if ((overall_progress > 0) && !progress_finished) {
-					if (overall_progress >= 100.0f) {
+					if (overall_progress >= 100.0F) {
 						progress_finished = 1;
 					}
 					print_progress_real(overall_progress, 0);
@@ -2568,7 +2638,7 @@ files_out:
 				do_post_notification(device, NP_SYNC_DID_FINISH);
 		}
 	} else {
-		printf("ERROR: Could not start service %s.\n", MOBILEBACKUP2_SERVICE_NAME);
+		printf("ERROR: Could not start service %s: %s\n", MOBILEBACKUP2_SERVICE_NAME, lockdownd_strerror(ldret));
 		lockdownd_client_free(lockdown);
 		lockdown = NULL;
 	}

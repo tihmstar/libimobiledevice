@@ -51,15 +51,16 @@ static void print_usage(int argc, char **argv, int is_error)
 
 	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS] -- <LAT> <LONG>\n", bname);
 	fprintf(is_error ? stderr : stdout, "       %s [OPTIONS] reset\n", bname);
-	fprintf(is_error ? stderr : stdout, "\n" \
-		"OPTIONS:\n" \
-		"  -u, --udid UDID    target specific device by UDID\n" \
-		"  -n, --network      connect to network device\n" \
-		"  -d, --debug        enable communication debugging\n" \
-		"  -h, --help         prints usage information\n" \
-		"  -v, --version      prints version information\n" \
-		"\n" \
-		"Homepage:    <" PACKAGE_URL ">\n" \
+	fprintf(is_error ? stderr : stdout,
+		"\n"
+		"OPTIONS:\n"
+		"  -u, --udid UDID       target specific device by UDID\n"
+		"  -n, --network         connect to network device\n"
+		"  -d, --debug           enable communication debugging\n"
+		"  -h, --help            prints usage information\n"
+		"  -v, --version         prints version information\n"
+		"\n"
+		"Homepage:    <" PACKAGE_URL ">\n"
 		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
 	);
 }
@@ -141,10 +142,11 @@ int main(int argc, char **argv)
 	lockdownd_client_new_with_handshake(device, &lockdown, TOOL_NAME);
 
 	lockdownd_service_descriptor_t svc = NULL;
-	if (lockdownd_start_service(lockdown, DT_SIMULATELOCATION_SERVICE, &svc) != LOCKDOWN_E_SUCCESS) {
+	lockdownd_error_t lerr = lockdownd_start_service(lockdown, DT_SIMULATELOCATION_SERVICE, &svc);
+	if (lerr != LOCKDOWN_E_SUCCESS) {
 		lockdownd_client_free(lockdown);
 		idevice_free(device);
-		printf("ERROR: Could not start the simulatelocation service. Make sure a developer disk image is mounted!\n");
+		printf("ERROR: Could not start the simulatelocation service: %s\nMake sure a developer disk image is mounted!\n", lockdownd_strerror(lerr));
 		return -1;
 	}
 	lockdownd_client_free(lockdown);

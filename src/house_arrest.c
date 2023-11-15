@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <plist/plist.h>
 
+#include "idevice.h"
 #include "house_arrest.h"
 #include "property_list_service.h"
 #include "afc.h"
