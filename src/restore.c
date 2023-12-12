@@ -376,13 +376,26 @@ LIBIMOBILEDEVICE_API restored_error_t restored_start_restore(restored_client_t c
 	restored_error_t ret = RESTORE_E_UNKNOWN_ERROR;
 
 	dict = plist_new_dict();
-	plist_dict_add_label(dict, client->label);
-	plist_dict_set_item(dict,"Request", plist_new_string("StartRestore"));
-	if (options) {
-		plist_dict_set_item(dict, "RestoreOptions", plist_copy(options));
+	if (version == 7){
+		/*
+			iOS 1.0.x restores are a bit different. 
+			We don't tell the device to start the restore then act as client, 
+			but instead we *are* the restore master and tell the device what to do straight away!
+		*/
+		plist_dict_set_item(dict,"Operation", plist_new_string("WaitPath"));
+		plist_dict_set_item(dict,"Path", plist_new_string("/dev/disk0"));
+		plist_dict_set_item(dict,"WaitDelay", plist_new_int(3));
+		plist_dict_set_item(dict,"WaitLimit", plist_new_int(0x7fffffff));
+	}else{
+		//Starting with iOS 1.1
+		plist_dict_add_label(dict, client->label);
+		plist_dict_set_item(dict,"Request", plist_new_string("StartRestore"));
+		if (options) {
+			plist_dict_set_item(dict, "RestoreOptions", plist_copy(options));
+		}
+		plist_dict_set_item(dict,"RestoreProtocolVersion", plist_new_uint(version));
 	}
-	plist_dict_set_item(dict,"RestoreProtocolVersion", plist_new_uint(version));
-
+	
 	/* send to device */
 	ret = restored_send(client, dict);
 	plist_free(dict);
