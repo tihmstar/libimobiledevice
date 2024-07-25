@@ -194,6 +194,7 @@ LIBIMOBILEDEVICE_API service_error_t service_disable_bypass_ssl(service_client_t
  *     SERVICE_E_INVALID_ARG if one or more of the arguments are invalid.
  */
 LIBIMOBILEDEVICE_API service_error_t service_get_connection(service_client_t client, idevice_connection_t *connection);
+
 #ifdef __cplusplus
 }
 #endif

@@ -212,7 +212,7 @@ LIBIMOBILEDEVICE_API mobilebackup_error_t mobilebackup_receive_restore_file_rece
  *    message plist, or MOBILEBACKUP_E_MUX_ERROR if a communication error
  *    occurs.
  */
-mobilebackup_error_t mobilebackup_receive_restore_application_received(mobilebackup_client_t client, plist_t *result);
+LIBIMOBILEDEVICE_API mobilebackup_error_t mobilebackup_receive_restore_application_received(mobilebackup_client_t client, plist_t *result);
 
 /**
  * Tells the device that the restore process is complete and waits for the
@@ -225,7 +225,7 @@ mobilebackup_error_t mobilebackup_receive_restore_application_received(mobilebac
  *    message plist is invalid, or MOBILEBACKUP_E_MUX_ERROR if a communication
  *    error occurs.
  */
-mobilebackup_error_t mobilebackup_send_restore_complete(mobilebackup_client_t client);
+LIBIMOBILEDEVICE_API mobilebackup_error_t mobilebackup_send_restore_complete(mobilebackup_client_t client);
 
 /**
  * Sends a backup error message to the device.
@@ -237,7 +237,7 @@ mobilebackup_error_t mobilebackup_send_restore_complete(mobilebackup_client_t cl
  *    one of the parameters is invalid, or MOBILEBACKUP_E_MUX_ERROR if a
  *    communication error occurs.
  */
-mobilebackup_error_t mobilebackup_send_error(mobilebackup_client_t client, const char *reason);
+LIBIMOBILEDEVICE_API mobilebackup_error_t mobilebackup_send_error(mobilebackup_client_t client, const char *reason);
 
 #ifdef __cplusplus
 }

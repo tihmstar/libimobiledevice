@@ -111,7 +111,7 @@ static restored_error_t restored_error(property_list_service_error_t err)
         return RESTORE_E_UNKNOWN_ERROR;
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_client_free(restored_client_t client)
+restored_error_t restored_client_free(restored_client_t client)
 {
 	if (!client)
 		return RESTORE_E_INVALID_ARG;
@@ -139,7 +139,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_client_free(restored_client_t cli
 	return ret;
 }
 
-LIBIMOBILEDEVICE_API void restored_client_set_label(restored_client_t client, const char *label)
+void restored_client_set_label(restored_client_t client, const char *label)
 {
 	if (client) {
 		if (client->label)
@@ -149,7 +149,7 @@ LIBIMOBILEDEVICE_API void restored_client_set_label(restored_client_t client, co
 	}
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_receive(restored_client_t client, plist_t *plist)
+restored_error_t restored_receive(restored_client_t client, plist_t *plist)
 {
 	if (!client || !plist || (plist && *plist))
 		return RESTORE_E_INVALID_ARG;
@@ -157,7 +157,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_receive(restored_client_t client,
 	return restored_error(property_list_service_receive_plist(client->parent, plist));
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_send(restored_client_t client, plist_t plist)
+restored_error_t restored_send(restored_client_t client, plist_t plist)
 {
 	if (!client || !plist)
 		return RESTORE_E_INVALID_ARG;
@@ -165,7 +165,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_send(restored_client_t client, pl
 	return restored_error(property_list_service_send_xml_plist(client->parent, plist));
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_query_type(restored_client_t client, char **type, uint64_t *version)
+restored_error_t restored_query_type(restored_client_t client, char **type, uint64_t *version)
 {
 	if (!client)
 		return RESTORE_E_INVALID_ARG;
@@ -224,7 +224,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_query_type(restored_client_t clie
 	return ret;
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_query_value(restored_client_t client, const char *key, plist_t *value)
+restored_error_t restored_query_value(restored_client_t client, const char *key, plist_t *value)
 {
 	if (!client || !key)
 		return RESTORE_E_INVALID_ARG;
@@ -266,7 +266,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_query_value(restored_client_t cli
 	return ret;
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_get_value(restored_client_t client, const char *key, plist_t *value)
+restored_error_t restored_get_value(restored_client_t client, const char *key, plist_t *value)
 {
 	plist_t item;
 
@@ -291,7 +291,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_get_value(restored_client_t clien
 	return RESTORE_E_SUCCESS;
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_client_new(idevice_t device, restored_client_t *client, const char *label)
+restored_error_t restored_client_new(idevice_t device, restored_client_t *client, const char *label)
 {
 	if (!client)
 		return RESTORE_E_INVALID_ARG;
@@ -335,7 +335,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_client_new(idevice_t device, rest
 	return ret;
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_goodbye(restored_client_t client)
+restored_error_t restored_goodbye(restored_client_t client)
 {
 	if (!client)
 		return RESTORE_E_INVALID_ARG;
@@ -367,7 +367,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_goodbye(restored_client_t client)
 	return ret;
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_start_restore(restored_client_t client, plist_t options, uint64_t version)
+restored_error_t restored_start_restore(restored_client_t client, plist_t options, uint64_t version)
 {
 	if (!client)
 		return RESTORE_E_INVALID_ARG;
@@ -376,13 +376,26 @@ LIBIMOBILEDEVICE_API restored_error_t restored_start_restore(restored_client_t c
 	restored_error_t ret = RESTORE_E_UNKNOWN_ERROR;
 
 	dict = plist_new_dict();
-	plist_dict_add_label(dict, client->label);
-	plist_dict_set_item(dict,"Request", plist_new_string("StartRestore"));
-	if (options) {
-		plist_dict_set_item(dict, "RestoreOptions", plist_copy(options));
+	if (version == 7){
+		/*
+			iOS 1.0.x restores are a bit different. 
+			We don't tell the device to start the restore then act as client, 
+			but instead we *are* the restore master and tell the device what to do straight away!
+		*/
+		plist_dict_set_item(dict,"Operation", plist_new_string("WaitPath"));
+		plist_dict_set_item(dict,"Path", plist_new_string("/dev/disk0"));
+		plist_dict_set_item(dict,"WaitDelay", plist_new_int(3));
+		plist_dict_set_item(dict,"WaitLimit", plist_new_int(0x7fffffff));
+	}else{
+		//Starting with iOS 1.1
+		plist_dict_add_label(dict, client->label);
+		plist_dict_set_item(dict,"Request", plist_new_string("StartRestore"));
+		if (options) {
+			plist_dict_set_item(dict, "RestoreOptions", plist_copy(options));
+		}
+		plist_dict_set_item(dict,"RestoreProtocolVersion", plist_new_uint(version));
 	}
-	plist_dict_set_item(dict,"RestoreProtocolVersion", plist_new_uint(version));
-
+	
 	/* send to device */
 	ret = restored_send(client, dict);
 	plist_free(dict);
@@ -391,7 +404,7 @@ LIBIMOBILEDEVICE_API restored_error_t restored_start_restore(restored_client_t c
 	return ret;
 }
 
-LIBIMOBILEDEVICE_API restored_error_t restored_reboot(restored_client_t client)
+restored_error_t restored_reboot(restored_client_t client)
 {
 	if (!client)
 		return RESTORE_E_INVALID_ARG;

@@ -12,31 +12,38 @@ jobs:
     - name: install dependencies
       run: |
           sudo apt-get update
-          sudo apt-get install cython3
+          pip install cython
     - name: prepare environment
       run: |
           echo "target_triplet=`gcc -dumpmachine`" >> $GITHUB_ENV
     - name: fetch libplist
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libplist-latest_${{env.target_triplet}}
         repo: libimobiledevice/libplist
     - name: fetch libusbmuxd
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libusbmuxd-latest_${{env.target_triplet}}
         repo: libimobiledevice/libusbmuxd
     - name: fetch libimobiledevice-glue
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libimobiledevice-glue-latest_${{env.target_triplet}}
         repo: libimobiledevice/libimobiledevice-glue
+    - name: fetch libtatsu
+      uses: dawidd6/action-download-artifact@v3
+      with:
+        github_token: ${{secrets.GITHUB_TOKEN}}
+        workflow: build.yml
+        name: libtatsu-latest_${{env.target_triplet}}
+        repo: libimobiledevice/libtatsu
     - name: install external dependencies
       run: |
           mkdir extract
@@ -45,7 +52,7 @@ jobs:
           done
           sudo cp -r extract/* /
           sudo ldconfig
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 0
     - name: autogen
@@ -60,7 +67,7 @@ jobs:
           DESTDIR=`pwd`/dest make install
           tar -C dest -cf libimobiledevice.tar usr
     - name: publish artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: libimobiledevice-latest_${{env.target_triplet}}
         path: libimobiledevice.tar
@@ -74,29 +81,36 @@ jobs:
           else
             brew install libtool autoconf automake pkgconfig
           fi
-          pip install cython
+          pip3 install --break-system-packages cython
       shell: bash
     - name: fetch libplist
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libplist-latest_macOS
         repo: libimobiledevice/libplist
     - name: fetch libusbmuxd
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libusbmuxd-latest_macOS
         repo: libimobiledevice/libusbmuxd
     - name: fetch libimobiledevice-glue
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libimobiledevice-glue-latest_macOS
         repo: libimobiledevice/libimobiledevice-glue
+    - name: fetch libtatsu
+      uses: dawidd6/action-download-artifact@v3
+      with:
+        github_token: ${{secrets.GITHUB_TOKEN}}
+        workflow: build.yml
+        name: libtatsu-latest_macOS
+        repo: libimobiledevice/libtatsu
     - name: install external dependencies
       run: |
           mkdir extract
@@ -104,7 +118,7 @@ jobs:
             tar -C extract -xvf $I
           done
           sudo cp -r extract/* /
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: install additional requirements
       run: |
           mkdir -p lib
@@ -133,6 +147,16 @@ jobs:
           done
           export CFLAGS="$USEARCHS -isysroot $SDKDIR"
           echo "Using CFLAGS: $CFLAGS"
+          PYTHON3_BIN=`xcrun -f python3`
+          if test -x $PYTHON3_BIN; then
+            export PYTHON=$PYTHON3_BIN
+            PYTHON_VER=`$PYTHON3_BIN -c "import distutils.sysconfig; print(distutils.sysconfig.get_config_var('VERSION'))"`
+            PYTHON_EXEC_PREFIX=`$PYTHON3_BIN -c "import distutils.sysconfig; print(distutils.sysconfig.get_config_var('exec_prefix'))"`
+            PYTHON_LIBS_PATH=$PYTHON_EXEC_PREFIX/lib
+            PYTHON_FRAMEWORK_PATH=$PYTHON_EXEC_PREFIX/Python3
+            export PYTHON_LIBS="-L$PYTHON_LIBS_PATH -lpython$PYTHON_VER"
+            export PYTHON_EXTRA_LDFLAGS="-Wl,-stack_size,1000000  -framework CoreFoundation $PYTHON_FRAMEWORK_PATH"
+          fi
           ./autogen.sh PKG_CONFIG_PATH=/usr/local/lib/pkgconfig --enable-debug \
               openssl_CFLAGS="-I${{ env.DEPSDIR }}/libressl-${{ env.LIBRESSL_VER }}/include" \
               openssl_LIBS="-Xlinker ${{ env.LIBSSL }} -Xlinker ${{ env.LIBCRYPTO }}"
@@ -146,7 +170,7 @@ jobs:
           DESTDIR=`pwd`/dest make install
           tar -C dest -cf libimobiledevice.tar usr
     - name: publish artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: libimobiledevice-latest_macOS
         path: libimobiledevice.tar
@@ -183,26 +207,33 @@ jobs:
           echo "target_triplet=`gcc -dumpmachine`" >> $GITHUB_ENV
           git config --global core.autocrlf false
     - name: fetch libplist
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libplist-latest_${{ matrix.arch }}-${{ env.dest }}
         repo: libimobiledevice/libplist
     - name: fetch libusbmuxd
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libusbmuxd-latest_${{ matrix.arch }}-${{ env.dest }}
         repo: libimobiledevice/libusbmuxd
     - name: fetch libimobiledevice-glue
-      uses: dawidd6/action-download-artifact@v2
+      uses: dawidd6/action-download-artifact@v3
       with:
         github_token: ${{secrets.GITHUB_TOKEN}}
         workflow: build.yml
         name: libimobiledevice-glue-latest_${{ matrix.arch }}-${{ env.dest }}
         repo: libimobiledevice/libimobiledevice-glue
+    - name: fetch libtatsu
+      uses: dawidd6/action-download-artifact@v3
+      with:
+        github_token: ${{secrets.GITHUB_TOKEN}}
+        workflow: build.yml
+        name: libtatsu-latest_${{ matrix.arch }}-${{ env.dest }}
+        repo: libimobiledevice/libtatsu
     - name: install external dependencies
       run: |
           mkdir extract
@@ -210,7 +241,7 @@ jobs:
             tar -C extract -xvf $I
           done
           cp -r extract/* /
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: autogen
       run: ./autogen.sh CC=gcc CXX=g++ --enable-debug
     - name: make
@@ -223,7 +254,7 @@ jobs:
           DESTDIR=`pwd`/dest make install
           tar -C dest -cf libimobiledevice.tar ${{ env.dest }}
     - name: publish artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: libimobiledevice-latest_${{ matrix.arch }}-${{ env.dest }}
         path: libimobiledevice.tar
