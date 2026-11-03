@@ -36,7 +36,8 @@
 #include <time.h>
 #include <sys/time.h>
 #include <inttypes.h>
-#ifndef WIN32
+#include <sys/stat.h>
+#ifndef _WIN32
 #include <signal.h>
 #endif
 
@@ -87,7 +88,7 @@ static void print_usage(int argc, char **argv, int is_error)
 		"  mount PATH     Mount the developer disk image at PATH.\n"
 		"                 For iOS 17+, PATH is a directory containing a .dmg image,\n"
 		"                 a BuildManifest.plist, and a Firmware sub-directory;\n"
-		"                 for older versions PATH is a .dmg filename with a"
+		"                 for older versions PATH is a .dmg filename with a\n"
 		"                 .dmg.signature in the same directory, or with another\n"
 		"                 parameter pointing to a file elsewhere.\n"
 		"  list           List mounted disk images.\n"
@@ -183,7 +184,7 @@ int main(int argc, char **argv)
 	size_t image_size = 0;
 	char *image_sig_path = NULL;
 
-#ifndef WIN32
+#ifndef _WIN32
 	signal(SIGPIPE, SIG_IGN);
 #endif
 	parse_opts(argc, argv);
@@ -267,23 +268,14 @@ int main(int argc, char **argv)
 		goto leave;
 	}
 
-	plist_t pver = NULL;
-	char *product_version = NULL;
-	lockdownd_get_value(lckd, NULL, "ProductVersion", &pver);
-	if (pver && plist_get_node_type(pver) == PLIST_STRING) {
-		plist_get_string_val(pver, &product_version);
-	}
+	unsigned int device_version = idevice_get_device_version(device);
+
 	disk_image_upload_type_t disk_image_upload_type = DISK_IMAGE_UPLOAD_TYPE_AFC;
-	int product_version_major = 0;
-	int product_version_minor = 0;
-	if (product_version) {
-		if (sscanf(product_version, "%d.%d.%*d", &product_version_major, &product_version_minor) == 2) {
-			if (product_version_major >= 7)
-				disk_image_upload_type = DISK_IMAGE_UPLOAD_TYPE_UPLOAD_IMAGE;
-		}
+	if (device_version >= IDEVICE_DEVICE_VERSION(7,0,0)) {
+		disk_image_upload_type = DISK_IMAGE_UPLOAD_TYPE_UPLOAD_IMAGE;
 	}
 
-	if (product_version_major >= 16) {
+	if (device_version >= IDEVICE_DEVICE_VERSION(16,0,0)) {
 		uint8_t dev_mode_status = 0;
 		plist_t val = NULL;
 		ldret = lockdownd_get_value(lckd, "com.apple.security.mac.amfi", "DeveloperModeStatus", &val);
@@ -336,7 +328,7 @@ int main(int argc, char **argv)
 			goto leave;
 		}
 		image_size = fst.st_size;
-		if (product_version_major < 17 && stat(image_sig_path, &fst) != 0) {
+		if (device_version < IDEVICE_DEVICE_VERSION(17,0,0) && stat(image_sig_path, &fst) != 0) {
 			fprintf(stderr, "ERROR: stat: %s: %s\n", image_sig_path, strerror(errno));
 			goto leave;
 		}
@@ -351,7 +343,7 @@ int main(int argc, char **argv)
 	if (cmd == CMD_LIST) {
 		/* list mounts mode */
 		if (!imagetype) {
-			if (product_version_major < 17) {
+			if (device_version < IDEVICE_DEVICE_VERSION(17,0,0)) {
 				imagetype = "Developer";
 			} else {
 				imagetype = "Personalized";
@@ -371,7 +363,7 @@ int main(int argc, char **argv)
 		struct stat fst;
 		plist_t mount_options = NULL;
 
-		if (product_version_major < 17) {
+		if (device_version < IDEVICE_DEVICE_VERSION(17,0,0)) {
 			f = fopen(image_sig_path, "rb");
 			if (!f) {
 				fprintf(stderr, "Error opening signature file '%s': %s\n", image_sig_path, strerror(errno));
@@ -606,20 +598,13 @@ int main(int argc, char **argv)
 			case DISK_IMAGE_UPLOAD_TYPE_AFC:
 			default:
 				printf("Uploading %s --> afc:///%s\n", image_path, targetname);
-				char **strs = NULL;
-				if (afc_get_file_info(afc, PKG_PATH, &strs) != AFC_E_SUCCESS) {
+				plist_t fileinfo = NULL;
+				if (afc_get_file_info_plist(afc, PKG_PATH, &fileinfo) != AFC_E_SUCCESS) {
 					if (afc_make_directory(afc, PKG_PATH) != AFC_E_SUCCESS) {
 						fprintf(stderr, "WARNING: Could not create directory '%s' on device!\n", PKG_PATH);
 					}
 				}
-				if (strs) {
-					int i = 0;
-					while (strs[i]) {
-						free(strs[i]);
-						i++;
-					}
-					free(strs);
-				}
+				plist_free(fileinfo);
 
 				uint64_t af = 0;
 				if ((afc_file_open(afc, targetname, AFC_FOPEN_WRONLY, &af) !=

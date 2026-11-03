@@ -29,7 +29,11 @@
 #define __USE_GNU 1
 #include <stdio.h>
 #include <ctype.h>
+
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
+
 #include <plist/plist.h>
 
 #include "idevice.h"
@@ -505,7 +509,7 @@ lockdownd_error_t lockdownd_cu_pairing_create(lockdownd_client_t client, lockdow
 			char *s_version = NULL;
 			plist_get_string_val(p_version, &s_version);
 			if (s_version && sscanf(s_version, "%d.%d.%d", &vers[0], &vers[1], &vers[2]) >= 2) {
-				client->device->version = DEVICE_VERSION(vers[0], vers[1], vers[2]);
+				client->device->version = IDEVICE_DEVICE_VERSION(vers[0], vers[1], vers[2]);
 			}
 			free(s_version);
 		}
@@ -653,7 +657,7 @@ lockdownd_error_t lockdownd_cu_pairing_create(lockdownd_client_t client, lockdow
 			CFStringGetCString(cname, hostname, sizeof(hostname), kCFStringEncodingUTF8);
 			CFRelease(cname);
 #else
-#ifdef WIN32
+#ifdef _WIN32
 			DWORD hostname_len = sizeof(hostname);
 			GetComputerName(hostname, &hostname_len);
 #else
@@ -957,12 +961,12 @@ lockdownd_error_t lockdownd_cu_send_request_and_get_reply(lockdownd_client_t cli
 	hkdf_md(MD_ALGO_SHA512, (unsigned char*)READ_KEY_SALT_MDLD, sizeof(READ_KEY_SALT_MDLD)-1, (unsigned char*)READ_KEY_INFO_MDLD, sizeof(READ_KEY_INFO_MDLD)-1, client->cu_key, client->cu_key_len, cu_read_key, &cu_read_key_len);
 
 	// Starting with iOS/tvOS 11.2 and WatchOS 4.2, this nonce is random and sent along with the request. Before, the request doesn't have a nonce and it uses hardcoded nonce "sendone01234".
-	unsigned char cu_nonce[12] = "sendone01234"; // guaranteed to be random by fair dice troll
-        if (client->device->version >= DEVICE_VERSION(11,2,0)) {
+	unsigned char cu_nonce[] = "sendone01234"; // guaranteed to be random by fair dice troll
+        if (client->device->version >= IDEVICE_DEVICE_VERSION(11,2,0)) {
 #if defined(HAVE_OPENSSL)
-		RAND_bytes(cu_nonce, sizeof(cu_nonce));
+		RAND_bytes(cu_nonce, sizeof(cu_nonce)-1);
 #elif defined(HAVE_GCRYPT)
-		gcry_create_nonce(cu_nonce, sizeof(cu_nonce));
+		gcry_create_nonce(cu_nonce, sizeof(cu_nonce)-1);
 #endif
 	}
 
@@ -1128,7 +1132,7 @@ lockdownd_error_t lockdownd_pair_cu(lockdownd_client_t client)
 	plist_free(pubkey);	
 
 	plist_t pair_record_plist = plist_new_dict();
-	pair_record_generate_keys_and_certs(pair_record_plist, public_key);
+	pair_record_generate_keys_and_certs(pair_record_plist, public_key, client->device->version);
 
 	char* host_id = NULL;
 	char* system_buid = NULL;

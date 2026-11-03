@@ -30,6 +30,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
+#ifndef _WIN32
+#include <sys/time.h>
+#endif
 
 #include "src/idevice.h"
 #include "debug.h"
@@ -51,27 +54,31 @@ void internal_set_debug_level(int level)
 #ifndef STRIP_DEBUG_CODE
 static void debug_print_line(const char *func, const char *file, int line, const char *buffer)
 {
-	char *str_time = NULL;
-	char *header = NULL;
+	char str_time[24];
+#ifdef _WIN32
+	SYSTEMTIME lt;
+	GetLocalTime(&lt);
+	snprintf(str_time, 24, "%02d:%02d:%02d.%03d", lt.wHour, lt.wMinute, lt.wSecond, lt.wMilliseconds);
+#else
+#ifdef HAVE_GETTIMEOFDAY
+	struct timeval tv;
+	struct tm *tp;
+	gettimeofday(&tv, NULL);
+#ifdef HAVE_LOCALTIME_R
+	struct tm tp_;
+	tp = localtime_r(&tv.tv_sec, &tp_);
+#else
+	tp = localtime(&tv.tv_sec);
+#endif
+	strftime(str_time, 9, "%H:%M:%S", tp);
+	snprintf(str_time+8, 10, ".%03d", (int)tv.tv_usec/1000);
+#else
 	time_t the_time;
-
 	time(&the_time);
-	str_time = (char*)malloc(255);
-	strftime(str_time, 254, "%H:%M:%S", localtime (&the_time));
-
-	/* generate header text */
-	if(asprintf(&header, "%s %s:%d %s()", str_time, file, line, func)<0){}
-	free (str_time);
-
-	/* trim ending newlines */
-
-	/* print header */
-	fprintf(stderr, "%s: ", header);
-
-	/* print actual debug content */
-	fprintf(stderr, "%s\n", buffer);
-
-	free (header);
+	strftime(str_time, 15, "%H:%M:%S", localtime (&the_time));
+#endif
+#endif
+	fprintf(stderr, "%s %s:%d %s(): %s\n", str_time, file, line, func, buffer);
 }
 #endif
 
