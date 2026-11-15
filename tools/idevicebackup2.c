@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
@@ -54,7 +55,7 @@
 #define LOCK_ATTEMPTS 50
 #define LOCK_WAIT 200000
 
-#ifdef WIN32
+#ifdef _WIN32
 #include <windows.h>
 #include <conio.h>
 #define sleep(x) Sleep(x*1000)
@@ -74,6 +75,7 @@
 
 static int verbose = 1;
 static int quit_flag = 0;
+static int passcode_requested = 0;
 
 #define PRINT_VERBOSE(min_level, ...) if (verbose >= min_level) { printf(__VA_ARGS__); };
 
@@ -115,6 +117,10 @@ static void notify_cb(const char *notification, void *userdata)
 		quit_flag++;
 	} else if (!strcmp(notification, NP_BACKUP_DOMAIN_CHANGED)) {
 		backup_domain_changed = 1;
+	} else if (!strcmp(notification, "com.apple.LocalAuthentication.ui.presented")) {
+		passcode_requested = 1;
+	} else if (!strcmp(notification, "com.apple.LocalAuthentication.ui.dismissed")) {
+		passcode_requested = 0;
 	} else {
 		PRINT_VERBOSE(1, "Unhandled notification '%s' (TODO: implement)\n", notification);
 	}
@@ -126,21 +132,15 @@ static void mobilebackup_afc_get_file_contents(afc_client_t afc, const char *fil
 		return;
 	}
 
-	char **fileinfo = NULL;
+	plist_t fileinfo = NULL;
 	uint32_t fsize = 0;
 
-	afc_get_file_info(afc, filename, &fileinfo);
+	afc_get_file_info_plist(afc, filename, &fileinfo);
 	if (!fileinfo) {
 		return;
 	}
-	int i;
-	for (i = 0; fileinfo[i]; i+=2) {
-		if (!strcmp(fileinfo[i], "st_size")) {
-			fsize = atol(fileinfo[i+1]);
-			break;
-		}
-	}
-	afc_dictionary_free(fileinfo);
+	fsize = plist_dict_get_uint(fileinfo, "st_size");
+	plist_free(fileinfo);
 
 	if (fsize == 0) {
 		return;
@@ -173,7 +173,7 @@ static void mobilebackup_afc_get_file_contents(afc_client_t afc, const char *fil
 
 static int __mkdir(const char* path, int mode)
 {
-#ifdef WIN32
+#ifdef _WIN32
 	return mkdir(path);
 #else
 	return mkdir(path, mode);
@@ -202,7 +202,7 @@ static int mkdir_with_parents(const char *dir, int mode)
 	return res;
 }
 
-#ifdef WIN32
+#ifdef _WIN32
 static int win32err_to_errno(int err_value)
 {
 	switch (err_value) {
@@ -219,7 +219,7 @@ static int win32err_to_errno(int err_value)
 static int remove_file(const char* path)
 {
 	int e = 0;
-#ifdef WIN32
+#ifdef _WIN32
 	if (!DeleteFile(path)) {
 		e = win32err_to_errno(GetLastError());
 	}
@@ -234,7 +234,7 @@ static int remove_file(const char* path)
 static int remove_directory(const char* path)
 {
 	int e = 0;
-#ifdef WIN32
+#ifdef _WIN32
 	if (!RemoveDirectory(path)) {
 		e = win32err_to_errno(GetLastError());
 	}
@@ -455,7 +455,13 @@ static plist_t mobilebackup_factory_info_plist_new(const char* udid, idevice_t d
 	/* Installed Applications */
 	plist_dict_set_item(ret, "Installed Applications", installed_apps);
 
-	plist_dict_set_item(ret, "Last Backup Date", plist_new_date(time(NULL) - MAC_EPOCH, 0));
+	plist_dict_set_item(ret, "Last Backup Date",
+#ifdef HAVE_PLIST_UNIX_DATE
+		plist_new_unix_date(time(NULL))
+#else
+		plist_new_date(time(NULL) - MAC_EPOCH, 0)
+#endif
+	);
 
 	value_node = plist_dict_get_item(root_node, "MobileEquipmentIdentifier");
 	if (value_node)
@@ -657,6 +663,193 @@ static void do_post_notification(idevice_t device, const char *notification)
 	lockdownd_client_free(lockdown);
 }
 
+/* ANSI escape codes for cursor manipulation */
+#define CURSOR_UP       "\033[1A"
+#define CURSOR_DOWN     "\033[1B"
+#define CURSOR_SAVE     "\033[s"
+#define CURSOR_RESTORE  "\033[u"
+#define CURSOR_HIDE     "\033[?25l"
+#define CURSOR_SHOW     "\033[?25h"
+#define CLEAR_LINE      "\033[2K"
+#define MOVE_COL_1      "\r"
+
+#define TRANSFER_NONE 0
+#define TRANSFER_SEND 1
+#define TRANSFER_RECEIVE 2
+
+/* Progress state - 4-line reserved area display */
+static double overall_progress = 0;
+static double file_progress = 0;
+static uint64_t file_current = 0;
+static uint64_t file_total = 0;
+static int transfer_status = 0;
+static int progress_mode_active = 0;
+static char progress_status[256] = "";
+static char transfer_info[256] = "";
+
+static void draw_progress_bar(double percent, int width)
+{
+	int i;
+	double ratio = width / 100.0;
+	printf("[");
+	for (i = 0; i < width; i++) {
+		if (i < (int)(percent * ratio)) {
+			printf("#");
+		} else {
+			printf(".");
+		}
+	}
+	printf("]");
+}
+
+static void draw_transfer_bar(double percent, int width)
+{
+	int i;
+	int pos = (int)((percent / 100.0) * width);
+
+	if (pos >= width)
+		pos = width - 1;
+	if (pos < 0)
+		pos = 0;
+
+	printf("[");
+	for (i = 0; i < width; i++) {
+		if (percent >= 100.0) {
+			printf("=");
+		} else if (i < pos) {
+			printf("=");
+		} else if (i == pos) {
+			printf(">");
+		} else {
+			printf(" ");
+		}
+	}
+	printf("]");
+}
+
+/* Initialize the 4-line progress area */
+static void progress_init(void)
+{
+	if (!progress_mode_active) {
+		progress_mode_active = 1;
+		/* Use current line as line 1, and reserve 3 more lines */
+		printf("\n\n\n");
+		/* Save cursor position at line 4 */
+		printf(CURSOR_SAVE);
+		progress_status[0] = '\0';
+		transfer_info[0] = '\0';
+	}
+}
+
+/* Render the 4-line progress display using current global state */
+static void progress_render(void)
+{
+	const int bar_width = 30;
+	const char *direction_label = "Sending";
+	const char *display_name = transfer_info;
+	if (!progress_mode_active) {
+		progress_init();
+	}
+
+	/* Restore saved cursor position for line 4, then move to line 1 */
+	printf(CURSOR_RESTORE);
+	printf(CURSOR_UP CURSOR_UP CURSOR_UP);
+
+	if (transfer_status == TRANSFER_RECEIVE) {
+		direction_label = "Receiving";
+	} else if (transfer_status == TRANSFER_SEND) {
+		direction_label = "Sending";
+	} else {
+		direction_label = "";
+	}
+
+	/* Line 1: Overall backup progress */	
+	printf(CLEAR_LINE MOVE_COL_1);
+	printf("%-10s ", "Backup");
+	draw_progress_bar(overall_progress, bar_width);
+	printf(" %3.0f%%", overall_progress);
+
+	/* Line 2: Current file */
+	printf("\n");
+	printf(CLEAR_LINE MOVE_COL_1);
+	printf("%-10s ", direction_label);
+	if (display_name[0]) {
+		//printf("%s%s", direction_arrow, display_name);
+		printf("%s", display_name);
+	}
+
+	/* Line 3: Sending / Receiving progress */
+	printf("\n");
+	printf(CLEAR_LINE MOVE_COL_1);
+	printf("%-10s ", "");
+	draw_transfer_bar(file_progress, bar_width);
+	printf(" %5.1f%%", file_progress);
+	if (file_current > 0 || file_total > 0) {
+ 		char *format_size_current = string_format_size(file_current);
+ 		char *format_size_total = string_format_size(file_total);
+ 		if (format_size_current && format_size_total) {
+			printf("   %s / %s", format_size_current, format_size_total);
+ 		}
+ 		free(format_size_current);
+ 		free(format_size_total);
+	}
+	printf("     ");
+
+	/* Line 4: Status message */
+	printf("\n");
+	printf(CLEAR_LINE MOVE_COL_1);
+	printf("%-10s ", "Status");
+	if (progress_status[0]) {
+		printf("%s", progress_status);
+	}
+
+	/* Save cursor position at line 4 again for the next redraw */
+	printf(CURSOR_SAVE);
+	fflush(stdout);
+}
+
+/*
+ * Print a normal log line without permanently corrupting the reserved
+ * 4-line progress area. If progress mode is active, print the log message
+ * below the progress block, reserve a fresh 4-line area there, and redraw.
+ */
+static void progress_printf(const char *fmt, ...)
+{
+	va_list ap;
+
+	if (progress_mode_active) {
+		/* Go to saved line 4 and move to a fresh line below the block */
+		printf(CURSOR_RESTORE);
+		printf("\n");
+	}
+
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+
+	if (progress_mode_active) {
+		/*
+		 * Re-anchor the progress block on the current line:
+		 * current line becomes line 1, plus 3 reserved lines below it.
+		 */
+		printf("\n\n\n");
+		printf(CURSOR_SAVE);
+		progress_render();
+	}
+}
+
+#if 0
+/* Update progress values and render */
+static void progress_update(double overall, double file, uint64_t current, uint64_t total)
+{
+	overall_progress = overall;
+	file_progress = file;
+	file_current = current;
+	file_total = total;
+	progress_render();
+}
+
+/* Legacy single-line progress for simple operations */
 static void print_progress_real(double progress, int flush)
 {
 	int i = 0;
@@ -672,42 +865,55 @@ static void print_progress_real(double progress, int flush)
 
 	if (flush > 0) {
 		fflush(stdout);
-		if (progress == 100)
-			PRINT_VERBOSE(1, "\n");
+	}
+	if (progress == 100) {
+		PRINT_VERBOSE(1, "\n");
+	}
+}
+#endif
+
+/* Called during file transfers - uses 3-line display */
+static void print_progress(uint64_t current, uint64_t total, int sending)
+{
+	//double file_progress = 0;
+	/* Don't update file progress if overall backup is complete */
+	//if (overall_progress >= 100.0)
+	//	return;
+	file_current = current;
+	file_total = total;
+	if (total > 0) {
+		file_progress = ((double)current / (double)total) * 100;
+		if (file_progress > 100) file_progress = 100;
+	} else {
+		file_progress = 0;
+	}
+	//progress_update(overall_progress, file_progress, current, total);
+	transfer_status = sending;
+	progress_render();
+}
+
+/* Exit progress mode - print final newline */
+static void progress_finish(void)
+{
+	if (progress_mode_active) {
+		overall_progress = 100;
+		//transfer_status = TRANSFER_NONE;
+		progress_render();
+		progress_mode_active = 0;
+		printf("\n");
+		fflush(stdout);
+		progress_status[0] = '\0';
+		//transfer_info[0] = '\0';
 	}
 }
 
-static void print_progress(uint64_t current, uint64_t total)
-{
-	char *format_size = NULL;
-	double progress = ((double)current/(double)total)*100;
-	if (progress < 0)
-		return;
-
-	if (progress > 100)
-		progress = 100;
-
-	print_progress_real((double)progress, 0);
-
-	format_size = string_format_size(current);
-	PRINT_VERBOSE(1, " (%s", format_size);
-	free(format_size);
-	format_size = string_format_size(total);
-	PRINT_VERBOSE(1, "/%s)     ", format_size);
-	free(format_size);
-
-	fflush(stdout);
-	if (progress == 100)
-		PRINT_VERBOSE(1, "\n");
-}
-
-static double overall_progress = 0;
-
+#if 0
 static void mb2_set_overall_progress(double progress)
 {
 	if (progress > 0.0)
 		overall_progress = progress;
 }
+#endif
 
 static void mb2_set_overall_progress_from_message(plist_t message, char* identifier)
 {
@@ -726,7 +932,8 @@ static void mb2_set_overall_progress_from_message(plist_t message, char* identif
 
 	if (node != NULL) {
 		plist_get_real_val(node, &progress);
-		mb2_set_overall_progress(progress);
+		//mb2_set_overall_progress(progress);
+		overall_progress = progress;
 	}
 }
 
@@ -768,7 +975,7 @@ static int mb2_handle_send_file(mobilebackup2_client_t mobilebackup2, const char
 	uint32_t bytes = 0;
 	char *localfile = string_build_path(backup_dir, path, NULL);
 	char buf[32768];
-#ifdef WIN32
+#ifdef _WIN32
 	struct _stati64 fst;
 #else
 	struct stat fst;
@@ -779,7 +986,7 @@ static int mb2_handle_send_file(mobilebackup2_client_t mobilebackup2, const char
 	int errcode = -1;
 	int result = -1;
 	uint32_t length;
-#ifdef WIN32
+#ifdef _WIN32
 	uint64_t total;
 	uint64_t sent;
 #else
@@ -810,23 +1017,24 @@ static int mb2_handle_send_file(mobilebackup2_client_t mobilebackup2, const char
 		goto leave_proto_err;
 	}
 
-#ifdef WIN32
+#ifdef _WIN32
 	if (_stati64(localfile, &fst) < 0)
 #else
 	if (stat(localfile, &fst) < 0)
 #endif
 	{
 		if (errno != ENOENT)
-			printf("%s: stat failed on '%s': %d\n", __func__, localfile, errno);
+			progress_printf("%s: stat failed on '%s': %d\n", __func__, localfile, errno);
 		errcode = errno;
 		goto leave;
 	}
 
 	total = fst.st_size;
 
-	char *format_size = string_format_size(total);
-	PRINT_VERBOSE(1, "Sending '%s' (%s)\n", path, format_size);
-	free(format_size);
+	//char *format_size = string_format_size(total);
+	snprintf(transfer_info, sizeof(transfer_info), "%s", path); //"'%s' (%s)", path, format_size);
+	//free(format_size);
+	progress_render();
 
 	if (total == 0) {
 		errcode = 0;
@@ -835,7 +1043,7 @@ static int mb2_handle_send_file(mobilebackup2_client_t mobilebackup2, const char
 
 	f = fopen(localfile, "rb");
 	if (!f) {
-		printf("%s: Error opening local file '%s': %d\n", __func__, localfile, errno);
+		progress_printf("%s: Error opening local file '%s': %d\n", __func__, localfile, errno);
 		errcode = errno;
 		goto leave;
 	}
@@ -858,7 +1066,7 @@ static int mb2_handle_send_file(mobilebackup2_client_t mobilebackup2, const char
 		/* send file contents */
 		size_t r = fread(buf, 1, sizeof(buf), f);
 		if (r <= 0) {
-			printf("%s: read error\n", __func__);
+			progress_printf("%s: read error\n", __func__);
 			errcode = errno;
 			goto leave;
 		}
@@ -867,10 +1075,11 @@ static int mb2_handle_send_file(mobilebackup2_client_t mobilebackup2, const char
 			goto leave_proto_err;
 		}
 		if (bytes != (uint32_t)r) {
-			printf("Error: sent only %d of %d bytes\n", bytes, (int)r);
+			progress_printf("Error: sent only %d of %d bytes\n", bytes, (int)r);
 			goto leave_proto_err;
 		}
 		sent += r;
+		print_progress(sent, total, 1);
 	} while (sent < total);
 	fclose(f);
 	f = NULL;
@@ -900,10 +1109,10 @@ leave:
 		slen += length;
 		err = mobilebackup2_send_raw(mobilebackup2, (const char*)buf, slen, &bytes);
 		if (err != MOBILEBACKUP2_E_SUCCESS) {
-			printf("could not send message\n");
+			progress_printf("could not send message\n");
 		}
 		if (bytes != slen) {
-			printf("could only send %d from %d\n", bytes, slen);
+			progress_printf("could only send %d from %d\n", bytes, slen);
 		}
 	}
 
@@ -925,6 +1134,8 @@ static void mb2_handle_send_files(mobilebackup2_client_t mobilebackup2, plist_t 
 
 	plist_t files = plist_array_get_item(message, 1);
 	cnt = plist_array_get_size(files);
+
+	//snprintf(progress_status, sizeof(progress_status), "Sending files");
 
 	for (i = 0; i < cnt; i++) {
 		plist_t val = plist_array_get_item(files, i);
@@ -980,7 +1191,7 @@ static int mb2_receive_filename(mobilebackup2_client_t mobilebackup2, char** fil
 		}
 		if (nlen > 4096) {
 			// filename length is too large
-			printf("ERROR: %s: too large filename length (%d)!\n", __func__, nlen);
+			progress_printf("ERROR: %s: too large filename length (%d)!\n", __func__, nlen);
 			return 0;
 		}
 
@@ -994,7 +1205,7 @@ static int mb2_receive_filename(mobilebackup2_client_t mobilebackup2, char** fil
 		rlen = 0;
 		mobilebackup2_receive_raw(mobilebackup2, *filename, nlen, &rlen);
 		if (rlen != nlen) {
-			printf("ERROR: %s: could not read filename\n", __func__);
+			progress_printf("ERROR: %s: could not read filename\n", __func__);
 			return 0;
 		}
 
@@ -1035,16 +1246,23 @@ static int mb2_handle_receive_files(mobilebackup2_client_t mobilebackup2, plist_
 		plist_get_uint_val(node, &backup_total_size);
 	}
 	if (backup_total_size > 0) {
-		PRINT_VERBOSE(1, "Receiving files\n");
+		//progress_printf("Receiving files\n");
+		snprintf(progress_status, sizeof(progress_status), "Receiving files");  /* Clear status when starting file transfers */
+		//transfer_info[0] = '\0';    /* Clear transfer info */
 	}
 
 	do {
 		if (quit_flag)
 			break;
 
-		nlen = mb2_receive_filename(mobilebackup2, &dname);
+		nlen = mb2_receive_filename(mobilebackup2, &dname);	
 		if (nlen == 0) {
 			break;
+		}
+		if (nlen > 68) {
+			snprintf(transfer_info, sizeof(transfer_info), "...%s", dname + (nlen - 65));
+		} else {
+			snprintf(transfer_info, sizeof(transfer_info), "%s", dname);
 		}
 
 		nlen = mb2_receive_filename(mobilebackup2, &fname);
@@ -1068,7 +1286,7 @@ static int mb2_handle_receive_files(mobilebackup2_client_t mobilebackup2, plist_
 		nlen = 0;
 		mobilebackup2_receive_raw(mobilebackup2, (char*)&nlen, 4, &r);
 		if (r != 4) {
-			printf("ERROR: %s: could not receive code length!\n", __func__);
+			progress_printf("ERROR: %s: could not receive code length!\n", __func__);
 			break;
 		}
 		nlen = be32toh(nlen);
@@ -1078,13 +1296,13 @@ static int mb2_handle_receive_files(mobilebackup2_client_t mobilebackup2, plist_
 
 		mobilebackup2_receive_raw(mobilebackup2, &code, 1, &r);
 		if (r != 1) {
-			printf("ERROR: %s: could not receive code!\n", __func__);
+			progress_printf("ERROR: %s: could not receive code!\n", __func__);
 			break;
 		}
 
 		/* TODO remove this */
 		if ((code != CODE_SUCCESS) && (code != CODE_FILE_DATA) && (code != CODE_ERROR_REMOTE)) {
-			PRINT_VERBOSE(1, "Found new flag %02x\n", code);
+			progress_printf("Found new flag %02x\n", code);
 		}
 
 		remove_file(bname);
@@ -1110,7 +1328,7 @@ static int mb2_handle_receive_files(mobilebackup2_client_t mobilebackup2, plist_
 				backup_real_size += blocksize;
 			}
 			if (backup_total_size > 0) {
-				print_progress(backup_real_size, backup_total_size);
+				print_progress(backup_real_size, backup_total_size, TRANSFER_RECEIVE);
 			}
 			if (quit_flag)
 				break;
@@ -1130,7 +1348,7 @@ static int mb2_handle_receive_files(mobilebackup2_client_t mobilebackup2, plist_
 		} else {
 			errcode = errno_to_device_error(errno);
 			errdesc = strerror(errno);
-			printf("Error opening '%s' for writing: %s\n", bname, errdesc);
+			progress_printf("Error opening '%s' for writing: %s\n", bname, errdesc);
 			break;
 		}
 		if (nlen == 0) {
@@ -1145,7 +1363,7 @@ static int mb2_handle_receive_files(mobilebackup2_client_t mobilebackup2, plist_
 			msg[r] = 0;
 			/* If sent using CODE_FILE_DATA, end marker will be CODE_ERROR_REMOTE which is not an error! */
 			if (last_code != CODE_FILE_DATA) {
-				fprintf(stdout, "\nReceived an error message from device: %s\n", msg);
+				progress_printf("Received an error message from device: %s\n", msg);
 			}
 			free(msg);
 		}
@@ -1156,7 +1374,7 @@ static int mb2_handle_receive_files(mobilebackup2_client_t mobilebackup2, plist_
 
 	/* if there are leftovers to read, finish up cleanly */
 	if ((int)nlen-1 > 0) {
-		PRINT_VERBOSE(1, "\nDiscarding current data hunk.\n");
+		progress_printf("Discarding current data hunk.\n");
 		fname = (char*)malloc(nlen-1);
 		mobilebackup2_receive_raw(mobilebackup2, fname, nlen-1, &r);
 		free(fname);
@@ -1218,7 +1436,12 @@ static void mb2_handle_list_directory(mobilebackup2_client_t mobilebackup2, plis
 				plist_dict_set_item(fdict, "DLFileType", plist_new_string(ftype));
 				plist_dict_set_item(fdict, "DLFileSize", plist_new_uint(st.st_size));
 				plist_dict_set_item(fdict, "DLFileModificationDate",
-						    plist_new_date(st.st_mtime - MAC_EPOCH, 0));
+#ifdef HAVE_PLIST_UNIX_DATE
+						    plist_new_unix_date(st.st_mtime)
+#else
+						    plist_new_date(st.st_mtime - MAC_EPOCH, 0)
+#endif
+				);
 
 				plist_dict_set_item(dirlist, ep->d_name, fdict);
 				free(fpath);
@@ -1343,7 +1566,7 @@ static void mb2_copy_directory_by_path(const char *src, const char *dst)
 	}
 }
 
-#ifdef WIN32
+#ifdef _WIN32
 #define BS_CC '\b'
 #define my_getch getch
 #else
@@ -1415,7 +1638,9 @@ static char* ask_for_password(const char* msg, int type_again)
  */
 static void clean_exit(int sig)
 {
-	fprintf(stderr, "Exiting...\n");
+	snprintf(progress_status, sizeof(progress_status), "Abort requested, hold on...");
+	progress_render();
+	//fprintf(stderr, "Exiting...\n");
 	quit_flag++;
 }
 
@@ -1462,8 +1687,6 @@ static void print_usage(int argc, char **argv, int is_error)
 		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
 	);
 }
-
-#define DEVICE_VERSION(maj, min, patch) ((((maj) & 0xFF) << 16) | (((min) & 0xFF) << 8) | ((patch) & 0xFF))
 
 int main(int argc, char *argv[])
 {
@@ -1530,7 +1753,7 @@ int main(int argc, char *argv[])
 	/* we need to exit cleanly on running backups and restores or we cause havok */
 	signal(SIGINT, clean_exit);
 	signal(SIGTERM, clean_exit);
-#ifndef WIN32
+#ifndef _WIN32
 	signal(SIGQUIT, clean_exit);
 	signal(SIGPIPE, SIG_IGN);
 #endif
@@ -1844,34 +2067,20 @@ int main(int argc, char *argv[])
 	}
 
 	/* get ProductVersion */
-	char *product_version = NULL;
-	int device_version = 0;
-	node_tmp = NULL;
-	lockdownd_get_value(lockdown, NULL, "ProductVersion", &node_tmp);
-	if (node_tmp) {
-		if (plist_get_node_type(node_tmp) == PLIST_STRING) {
-			plist_get_string_val(node_tmp, &product_version);
-		}
-		plist_free(node_tmp);
-		node_tmp = NULL;
-	}
-	if (product_version) {
-		int vers[3] = { 0, 0, 0 };
-		if (sscanf(product_version, "%d.%d.%d", &vers[0], &vers[1], &vers[2]) >= 2) {
-			device_version = DEVICE_VERSION(vers[0], vers[1], vers[2]);
-		}
-	}
+	int device_version = idevice_get_device_version(device);
 
 	/* start notification_proxy */
 	ldret = lockdownd_start_service(lockdown, NP_SERVICE_NAME, &service);
 	if ((ldret == LOCKDOWN_E_SUCCESS) && service && service->port) {
 		np_client_new(device, service, &np);
 		np_set_notify_callback(np, notify_cb, NULL);
-		const char *noties[5] = {
+		const char *noties[7] = {
 			NP_SYNC_CANCEL_REQUEST,
 			NP_SYNC_SUSPEND_REQUEST,
 			NP_SYNC_RESUME_REQUEST,
 			NP_BACKUP_DOMAIN_CHANGED,
+			"com.apple.LocalAuthentication.ui.presented",
+			"com.apple.LocalAuthentication.ui.dismissed",
 			NULL
 		};
 		np_observe_notifications(np, noties);
@@ -2058,6 +2267,16 @@ checkpoint:
 				}	else {
 					PRINT_VERBOSE(1, "Incremental backup mode.\n");
 				}
+				if (device_version >= IDEVICE_DEVICE_VERSION(16,1,0)) {
+					/* let's wait 2 second to see if the device passcode is requested */
+					int retries = 20;
+					while (retries-- > 0 && !passcode_requested) {
+						usleep(100000);
+					}
+					if (passcode_requested) {
+						printf("*** Waiting for passcode to be entered on the device ***\n");
+					}
+				}
 			} else {
 				if (err == MOBILEBACKUP2_E_BAD_VERSION) {
 					printf("ERROR: Could not start backup process: backup protocol version mismatch!\n");
@@ -2229,7 +2448,7 @@ checkpoint:
 			if (newpw || backup_password) {
 				mobilebackup2_send_message(mobilebackup2, "ChangePassword", opts);
 				uint8_t passcode_hint = 0;
-				if (device_version >= DEVICE_VERSION(13,0,0)) {
+				if (device_version >= IDEVICE_DEVICE_VERSION(13,0,0)) {
 					diagnostics_relay_client_t diag = NULL;
 					if (diagnostics_relay_client_start_service(device, &diag, TOOL_NAME) == DIAGNOSTICS_RELAY_E_SUCCESS) {
 						plist_t dict = NULL;
@@ -2299,6 +2518,8 @@ checkpoint:
 					/* device wants to download files from the computer */
 					mb2_set_overall_progress_from_message(message, dlmsg);
 					mb2_handle_send_files(mobilebackup2, message, backup_directory);
+			//snprintf(progress_status, sizeof(progress_status), "Waiting for device...");
+			//progress_render();
 				} else if (!strcmp(dlmsg, "DLMessageUploadFiles")) {
 					/* device wants to send files to the computer */
 					mb2_set_overall_progress_from_message(message, dlmsg);
@@ -2307,7 +2528,7 @@ checkpoint:
 					/* device wants to know how much disk space is available on the computer */
 					uint64_t freespace = 0;
 					int res = -1;
-#ifdef WIN32
+#ifdef _WIN32
 					if (GetDiskFreeSpaceEx(backup_directory, (PULARGE_INTEGER)&freespace, NULL, NULL)) {
 						res = 0;
 					}
@@ -2316,7 +2537,7 @@ checkpoint:
 					memset(&fs, '\0', sizeof(fs));
 					res = statvfs(backup_directory, &fs);
 					if (res == 0) {
-						freespace = (uint64_t)fs.f_bavail * (uint64_t)fs.f_bsize;
+						freespace = (uint64_t)fs.f_bavail * (uint64_t)fs.f_frsize;
 					}
 #endif
 					plist_t freespace_item = plist_new_uint(freespace);
@@ -2338,7 +2559,8 @@ checkpoint:
 					mb2_set_overall_progress_from_message(message, dlmsg);
 					plist_t moves = plist_array_get_item(message, 1);
 					uint32_t cnt = plist_dict_get_size(moves);
-					PRINT_VERBOSE(1, "Moving %d file%s\n", cnt, (cnt == 1) ? "" : "s");
+					snprintf(progress_status, sizeof(progress_status), "Moving %d file%s", cnt, (cnt == 1) ? "" : "s");
+					progress_render();
 					plist_dict_iter iter = NULL;
 					plist_dict_new_iter(moves, &iter);
 					errcode = 0;
@@ -2389,7 +2611,8 @@ checkpoint:
 					mb2_set_overall_progress_from_message(message, dlmsg);
 					plist_t removes = plist_array_get_item(message, 1);
 					uint32_t cnt = plist_array_get_size(removes);
-					PRINT_VERBOSE(1, "Removing %d file%s\n", cnt, (cnt == 1) ? "" : "s");
+					snprintf(progress_status, sizeof(progress_status), "Removing %d file%s", cnt, (cnt == 1) ? "" : "s");
+					progress_render();
 					uint32_t ii = 0;
 					errcode = 0;
 					errdesc = NULL;
@@ -2516,9 +2739,10 @@ checkpoint:
 				if ((overall_progress > 0) && !progress_finished) {
 					if (overall_progress >= 100.0F) {
 						progress_finished = 1;
+						//progress_finish();
+					//} else {
+					//	print_progress_real(overall_progress, 0);
 					}
-					print_progress_real(overall_progress, 0);
-					PRINT_VERBOSE(1, " Finished\n");
 				}
 
 files_out:
@@ -2542,6 +2766,8 @@ files_out:
 
 			plist_free(message);
 			free(dlmsg);
+
+			progress_finish();
 
 			/* report operation status to user */
 			switch (cmd) {

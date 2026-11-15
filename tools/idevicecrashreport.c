@@ -31,7 +31,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
-#ifndef WIN32
+#include <sys/stat.h>
+#ifndef _WIN32
 #include <signal.h>
 #endif
 #include <libimobiledevice-glue/utils.h>
@@ -42,7 +43,7 @@
 #include <libimobiledevice/afc.h>
 #include <plist/plist.h>
 
-#ifdef WIN32
+#ifdef _WIN32
 #include <windows.h>
 #define S_IFLNK S_IFREG
 #define S_IFSOCK S_IFREG
@@ -54,11 +55,12 @@
 const char* target_directory = NULL;
 static int extract_raw_crash_reports = 0;
 static int keep_crash_reports = 0;
+static int remove_all = 0;
 
 static int file_exists(const char* path)
 {
 	struct stat tst;
-#ifdef WIN32
+#ifdef _WIN32
 	return (stat(path, &tst) == 0);
 #else
 	return (lstat(path, &tst) == 0);
@@ -144,7 +146,7 @@ static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char
 			continue;
 		}
 
-		char **fileinfo = NULL;
+		plist_t fileinfo = NULL;
 		struct stat stbuf;
 		memset(&stbuf, '\0', sizeof(struct stat));
 
@@ -152,7 +154,7 @@ static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char
 		strcpy(((char*)source_filename) + device_directory_length, list[k]);
 
 		/* assemble absolute target filename */
-#ifdef WIN32
+#ifdef _WIN32
 		/* replace every ':' with '-' since ':' is an illegal character for file names in windows */
 		char* current_pos = strchr(list[k], ':');
 		while (current_pos) {
@@ -171,85 +173,90 @@ static int afc_client_copy_and_remove_crash_reports(afc_client_t afc, const char
 		}
 
 		/* get file information */
-		afc_get_file_info(afc, source_filename, &fileinfo);
+		afc_get_file_info_plist(afc, source_filename, &fileinfo);
 		if (!fileinfo) {
 			printf("Failed to read information for '%s'. Skipping...\n", source_filename);
 			continue;
 		}
 
 		/* parse file information */
-		int i;
-		for (i = 0; fileinfo[i]; i+=2) {
-			if (!strcmp(fileinfo[i], "st_size")) {
-				stbuf.st_size = atoll(fileinfo[i+1]);
-			} else if (!strcmp(fileinfo[i], "st_ifmt")) {
-				if (!strcmp(fileinfo[i+1], "S_IFREG")) {
-					stbuf.st_mode = S_IFREG;
-				} else if (!strcmp(fileinfo[i+1], "S_IFDIR")) {
-					stbuf.st_mode = S_IFDIR;
-				} else if (!strcmp(fileinfo[i+1], "S_IFLNK")) {
-					stbuf.st_mode = S_IFLNK;
-				} else if (!strcmp(fileinfo[i+1], "S_IFBLK")) {
-					stbuf.st_mode = S_IFBLK;
-				} else if (!strcmp(fileinfo[i+1], "S_IFCHR")) {
-					stbuf.st_mode = S_IFCHR;
-				} else if (!strcmp(fileinfo[i+1], "S_IFIFO")) {
-					stbuf.st_mode = S_IFIFO;
-				} else if (!strcmp(fileinfo[i+1], "S_IFSOCK")) {
-					stbuf.st_mode = S_IFSOCK;
-				}
-			} else if (!strcmp(fileinfo[i], "st_nlink")) {
-				stbuf.st_nlink = atoi(fileinfo[i+1]);
-			} else if (!strcmp(fileinfo[i], "st_mtime")) {
-				stbuf.st_mtime = (time_t)(atoll(fileinfo[i+1]) / 1000000000);
-			} else if (!strcmp(fileinfo[i], "LinkTarget")) {
-				/* report latest crash report filename */
-				printf("Link: %s\n", (char*)target_filename + strlen(target_directory));
+		stbuf.st_size = plist_dict_get_uint(fileinfo, "st_size");
+		const char* s_ifmt = plist_get_string_ptr(plist_dict_get_item(fileinfo, "st_ifmt"), NULL);
+		if (s_ifmt) {
+			if (!strcmp(s_ifmt, "S_IFREG")) {
+				stbuf.st_mode = S_IFREG;
+			} else if (!strcmp(s_ifmt, "S_IFDIR")) {
+				stbuf.st_mode = S_IFDIR;
+			} else if (!strcmp(s_ifmt, "S_IFLNK")) {
+				stbuf.st_mode = S_IFLNK;
+			} else if (!strcmp(s_ifmt, "S_IFBLK")) {
+				stbuf.st_mode = S_IFBLK;
+			} else if (!strcmp(s_ifmt, "S_IFCHR")) {
+				stbuf.st_mode = S_IFCHR;
+			} else if (!strcmp(s_ifmt, "S_IFIFO")) {
+				stbuf.st_mode = S_IFIFO;
+			} else if (!strcmp(s_ifmt, "S_IFSOCK")) {
+				stbuf.st_mode = S_IFSOCK;
+			}
+		}
+		stbuf.st_nlink = plist_dict_get_uint(fileinfo, "st_nlink");
+		stbuf.st_mtime = (time_t)(plist_dict_get_uint(fileinfo, "st_mtime") / 1000000000);
+		const char* linktarget = plist_get_string_ptr(plist_dict_get_item(fileinfo, "LinkTarget"), NULL);
+		if (linktarget && !remove_all) {
+			/* report latest crash report filename */
+			printf("Link: %s\n", (char*)target_filename + strlen(target_directory));
 
-				/* remove any previous symlink */
-				if (file_exists(target_filename)) {
-					remove(target_filename);
-				}
+			/* remove any previous symlink */
+			if (file_exists(target_filename)) {
+				remove(target_filename);
+			}
 
-#ifndef WIN32
-				/* use relative filename */
-				char* b = strrchr(fileinfo[i+1], '/');
-				if (b == NULL) {
-					b = fileinfo[i+1];
+#ifndef _WIN32
+			/* use relative filename */
+			const char* b = strrchr(linktarget, '/');
+			if (b == NULL) {
+				b = linktarget;
 				} else {
-					b++;
-				}
+				b++;
+			}
 
-				/* create a symlink pointing to latest log */
-				if (symlink(b, target_filename) < 0) {
-					fprintf(stderr, "Can't create symlink to %s\n", b);
-				}
+			/* create a symlink pointing to latest log */
+			if (symlink(b, target_filename) < 0) {
+				fprintf(stderr, "Can't create symlink to %s\n", b);
+			}
 #endif
 
-				if (!keep_crash_reports)
-					afc_remove_path(afc, source_filename);
+			if (!keep_crash_reports)
+				afc_remove_path(afc, source_filename);
 
-				res = 0;
-			}
+			res = 0;
 		}
 
 		/* free file information */
-		afc_dictionary_free(fileinfo);
+		plist_free(fileinfo);
 
 		/* recurse into child directories */
 		if (S_ISDIR(stbuf.st_mode)) {
-#ifdef WIN32
-			mkdir(target_filename);
+			if (!remove_all) {
+#ifdef _WIN32
+				mkdir(target_filename);
 #else
-			mkdir(target_filename, 0755);
+				mkdir(target_filename, 0755);
 #endif
+			}
 			res = afc_client_copy_and_remove_crash_reports(afc, source_filename, target_filename, filename_filter);
 
 			/* remove directory from device */
-			if (!keep_crash_reports)
+			if (!remove_all && !keep_crash_reports)
 				afc_remove_path(afc, source_filename);
 		} else if (S_ISREG(stbuf.st_mode)) {
 			if (filename_filter != NULL && strstr(source_filename, filename_filter) == NULL) {
+				continue;
+			}
+
+			if (remove_all) {
+				printf("Remove: %s\n", source_filename);
+				afc_remove_path(afc, source_filename);
 				continue;
 			}
 
@@ -331,6 +338,7 @@ static void print_usage(int argc, char **argv, int is_error)
 		"  -f, --filter NAME     filter crash reports by NAME (case sensitive)\n"
 		"  -h, --help            prints usage information\n"
 		"  -v, --version         prints version information\n"
+		"  --remove-all          remove all crash logs found\n"
 		"\n"
 		"Homepage:    <" PACKAGE_URL ">\n"
 		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
@@ -361,10 +369,11 @@ int main(int argc, char* argv[])
 		{ "filter", required_argument, NULL, 'f' },
 		{ "extract", no_argument, NULL, 'e' },
 		{ "keep", no_argument, NULL, 'k' },
+		{ "remove-all", no_argument, NULL, 1 },
 		{ NULL, 0, NULL, 0}
 	};
 
-#ifndef WIN32
+#ifndef _WIN32
 	signal(SIGPIPE, SIG_IGN);
 #endif
 
@@ -405,6 +414,9 @@ int main(int argc, char* argv[])
 		case 'k':
 			keep_crash_reports = 1;
 			break;
+		case 1:
+			remove_all = 1;
+			break;
 		default:
 			print_usage(argc, argv, 1);
 			return 2;
@@ -414,12 +426,16 @@ int main(int argc, char* argv[])
 	argv += optind;
 
 	/* ensure a target directory was supplied */
-	if (!argv[0]) {
-		fprintf(stderr, "ERROR: missing target directory.\n");
-		print_usage(argc+optind, argv-optind, 1);
-		return 2;
+	if (!remove_all) {
+		if (!argv[0]) {
+			fprintf(stderr, "ERROR: missing target directory.\n");
+			print_usage(argc+optind, argv-optind, 1);
+			return 2;
+		}
+		target_directory = argv[0];
+	} else {
+		target_directory = ".";
 	}
-	target_directory = argv[0];
 
 	/* check if target directory exists */
 	if (!file_exists(target_directory)) {

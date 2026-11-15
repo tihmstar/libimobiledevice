@@ -113,7 +113,7 @@ int main(int argc, char **argv)
 
 	if ((argc > 2) || (argc < 1)) {
 		print_usage(argc+optind, argv-optind, 1);
-		return -1;
+		return 1;
 	}
 
 	if (argc == 2) {
@@ -123,7 +123,7 @@ int main(int argc, char **argv)
 			mode = RESET_LOCATION;
 		} else {
 			print_usage(argc+optind, argv-optind, 1);
-			return -1;
+			return 1;
 		}
 	}
 
@@ -135,19 +135,30 @@ int main(int argc, char **argv)
 		} else {
 			printf("ERROR: No device found!\n");
 		}
-		return -1;
+		return 1;
 	}
 
-	lockdownd_client_t lockdown;
-	lockdownd_client_new_with_handshake(device, &lockdown, TOOL_NAME);
+	lockdownd_client_t lockdown = NULL;
+	lockdownd_error_t lerr = lockdownd_client_new_with_handshake(device, &lockdown, TOOL_NAME);
+	if (lerr != LOCKDOWN_E_SUCCESS) {
+		idevice_free(device);
+		printf("ERROR: Could not connect to lockdownd: %s (%d)\n", lockdownd_strerror(lerr), lerr);
+		return 1;
+	}
 
 	lockdownd_service_descriptor_t svc = NULL;
-	lockdownd_error_t lerr = lockdownd_start_service(lockdown, DT_SIMULATELOCATION_SERVICE, &svc);
+	lerr = lockdownd_start_service(lockdown, DT_SIMULATELOCATION_SERVICE, &svc);
 	if (lerr != LOCKDOWN_E_SUCCESS) {
+		unsigned int device_version = idevice_get_device_version(device);
 		lockdownd_client_free(lockdown);
 		idevice_free(device);
-		printf("ERROR: Could not start the simulatelocation service: %s\nMake sure a developer disk image is mounted!\n", lockdownd_strerror(lerr));
-		return -1;
+		printf("ERROR: Could not start the simulatelocation service: %s\n", lockdownd_strerror(lerr));
+		if (device_version >= IDEVICE_DEVICE_VERSION(17,0,0)) {
+			printf("Note: This tool is currently not supported on iOS 17+\n");
+		} else {
+			printf("Make sure a developer disk image is mounted!\n");
+		}
+		return 1;
 	}
 	lockdownd_client_free(lockdown);
 
@@ -158,10 +169,9 @@ int main(int argc, char **argv)
 	lockdownd_service_descriptor_free(svc);
 
 	if (serr != SERVICE_E_SUCCESS) {
-		lockdownd_client_free(lockdown);
 		idevice_free(device);
 		printf("ERROR: Could not connect to simulatelocation service (%d)\n", serr);
-		return -1;
+		return 1;
 	}
 
 	uint32_t l;

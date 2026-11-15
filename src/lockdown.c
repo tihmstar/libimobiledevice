@@ -32,7 +32,11 @@
 #define __USE_GNU 1
 #include <stdio.h>
 #include <ctype.h>
+
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
+
 #include <plist/plist.h>
 #include <libimobiledevice-glue/utils.h>
 
@@ -43,7 +47,7 @@
 #include "common/userpref.h"
 #include "asprintf.h"
 
-#ifdef WIN32
+#ifdef _WIN32
 #include <windows.h>
 #define sleep(x) Sleep(x*1000)
 #endif
@@ -617,6 +621,7 @@ lockdownd_error_t lockdownd_client_new(idevice_t device, lockdownd_client_t *cli
 		.port = 0xf27e,
 		.ssl_enabled = 0
 	};
+	char *type = NULL;
 
 	property_list_service_client_t plistclient = NULL;
 	if (property_list_service_client_new(device, (lockdownd_service_descriptor_t)&service, &plistclient) != PROPERTY_LIST_SERVICE_E_SUCCESS) {
@@ -638,51 +643,32 @@ lockdownd_error_t lockdownd_client_new(idevice_t device, lockdownd_client_t *cli
 
 	client_loc->label = label ? strdup(label) : NULL;
 
-	*client = client_loc;
-
-	return LOCKDOWN_E_SUCCESS;
-}
-
-lockdownd_error_t lockdownd_client_new_with_handshake(idevice_t device, lockdownd_client_t *client, const char *label)
-{
-	if (!client)
-		return LOCKDOWN_E_INVALID_ARG;
-
-	lockdownd_error_t ret = LOCKDOWN_E_SUCCESS;
-	lockdownd_client_t client_loc = NULL;
-	plist_t pair_record = NULL;
-	char *host_id = NULL;
-	char *type = NULL;
-
-	ret = lockdownd_client_new(device, &client_loc, label);
-	if (LOCKDOWN_E_SUCCESS != ret) {
-		debug_info("failed to create lockdownd client.");
-		return ret;
-	}
-
-	/* perform handshake */
-	ret = lockdownd_query_type(client_loc, &type);
-	if (LOCKDOWN_E_SUCCESS != ret) {
+	int is_lockdownd = 0;
+	if (lockdownd_query_type(client_loc, &type) != LOCKDOWN_E_SUCCESS) {
 		debug_info("QueryType failed in the lockdownd client.");
-	} else if (strcmp("com.apple.mobile.lockdown", type) != 0) {
-		debug_info("Warning QueryType request returned \"%s\".", type);
+	} else if (!strcmp("com.apple.mobile.lockdown", type)) {
+		is_lockdownd = 1;
+	} else {
+		debug_info("QueryType request returned \"%s\"", type);
 	}
 	free(type);
 
-	if (device->version == 0) {
+	*client = client_loc;
+
+	if (is_lockdownd && device->version == 0) {
 		plist_t p_version = NULL;
 		if (lockdownd_get_value(client_loc, NULL, "ProductVersion", &p_version) == LOCKDOWN_E_SUCCESS) {
 			int vers[3] = {0, 0, 0};
 			char *s_version = NULL;
 			plist_get_string_val(p_version, &s_version);
 			if (s_version && sscanf(s_version, "%d.%d.%d", &vers[0], &vers[1], &vers[2]) >= 2) {
-				device->version = DEVICE_VERSION(vers[0], vers[1], vers[2]);
+				device->version = IDEVICE_DEVICE_VERSION(vers[0], vers[1], vers[2]);
 			}
 			free(s_version);
 		}
 		plist_free(p_version);
 	}
-	if (device->device_class == 0) {
+	if (is_lockdownd && device->device_class == 0) {
 		plist_t p_device_class = NULL;
 		if (lockdownd_get_value(client_loc, NULL, "DeviceClass", &p_device_class) == LOCKDOWN_E_SUCCESS) {
 			char* s_device_class = NULL;
@@ -707,6 +693,26 @@ lockdownd_error_t lockdownd_client_new_with_handshake(idevice_t device, lockdown
 		plist_free(p_device_class);
 	}
 
+	return LOCKDOWN_E_SUCCESS;
+}
+
+lockdownd_error_t lockdownd_client_new_with_handshake(idevice_t device, lockdownd_client_t *client, const char *label)
+{
+	if (!client)
+		return LOCKDOWN_E_INVALID_ARG;
+
+	lockdownd_error_t ret = LOCKDOWN_E_SUCCESS;
+	lockdownd_client_t client_loc = NULL;
+	plist_t pair_record = NULL;
+	char *host_id = NULL;
+
+	ret = lockdownd_client_new(device, &client_loc, label);
+	if (LOCKDOWN_E_SUCCESS != ret) {
+		debug_info("failed to create lockdownd client.");
+		return ret;
+	}
+
+	/* perform handshake */
 	userpref_error_t uerr = userpref_read_pair_record(client_loc->device->udid, &pair_record);
 	if (uerr == USERPREF_E_READ_ERROR) {
 		debug_info("ERROR: Failed to retrieve pair record for %s", client_loc->device->udid);
@@ -730,7 +736,7 @@ lockdownd_error_t lockdownd_client_new_with_handshake(idevice_t device, lockdown
 	plist_free(pair_record);
 	pair_record = NULL;
 
-	if (device->version < DEVICE_VERSION(7,0,0) && device->device_class != DEVICE_CLASS_WATCH) {
+	if (device->version < IDEVICE_DEVICE_VERSION(7,0,0) && device->device_class != DEVICE_CLASS_WATCH) {
 		/* for older devices, we need to validate pairing to receive trusted host status */
 		ret = lockdownd_validate_pair(client_loc, NULL);
 
@@ -836,7 +842,7 @@ static lockdownd_error_t pair_record_generate(lockdownd_client_t client, plist_t
 
 	/* generate keys and certificates into pair record */
 	userpref_error_t uret = USERPREF_E_SUCCESS;
-	uret = pair_record_generate_keys_and_certs(*pair_record, public_key);
+	uret = pair_record_generate_keys_and_certs(*pair_record, public_key, client->device->version);
 	switch(uret) {
 		case USERPREF_E_INVALID_ARG:
 			ret = LOCKDOWN_E_INVALID_ARG;
@@ -846,6 +852,7 @@ static lockdownd_error_t pair_record_generate(lockdownd_client_t client, plist_t
 			break;
 		case USERPREF_E_SSL_ERROR:
 			ret = LOCKDOWN_E_SSL_ERROR;
+			break;
 		default:
 			break;
 	}

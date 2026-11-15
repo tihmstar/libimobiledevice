@@ -15,7 +15,7 @@ dnl libtool versioning
 #                 changes to the signature and the semantic)
 #  ? :+1 : ?   == just internal changes
 # CURRENT : REVISION : AGE
-LIBIMOBILEDEVICE_SO_VERSION=6:0:0
+LIBIMOBILEDEVICE_SO_VERSION=7:0:1
 
 AC_SUBST(LIBIMOBILEDEVICE_SO_VERSION)
 
@@ -70,7 +70,7 @@ AC_TYPE_UINT32_T
 AC_TYPE_UINT8_T
 
 # Checks for library functions.
-AC_CHECK_FUNCS([asprintf strcasecmp strdup strerror strndup stpcpy vasprintf getifaddrs])
+AC_CHECK_FUNCS([asprintf strcasecmp strdup strerror strndup stpcpy vasprintf getifaddrs gettimeofday localtime_r])
 
 AC_CHECK_HEADER(endian.h, [ac_cv_have_endian_h="yes"], [ac_cv_have_endian_h="no"])
 if test "x$ac_cv_have_endian_h" = "xno"; then
@@ -84,7 +84,23 @@ if test "x$ac_cv_have_endian_h" = "xno"; then
   fi
 fi
 
+CACHED_CFLAGS="$CFLAGS"
+CFLAGS+=" $libplist_CFLAGS -Werror"
+
 AC_CHECK_DECL([plist_from_json], [AC_DEFINE([HAVE_PLIST_JSON], [1], [Define if libplist has JSON support])], [], [[#include <plist/plist.h>]])
+
+# check if libplist has plist_new_unix_date()
+AC_CACHE_CHECK(for plist_new_unix_date, ac_cv_plist_unix_date,
+	AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+		#include <plist/plist.h>
+		]], [[
+			return plist_new_unix_date(0) ? 0 : 1
+		]])],[ac_cv_plist_unix_date=yes],[ac_cv_plist_unix_date=no]))
+if test "$ac_cv_plist_unix_date" = "yes"; then
+	AC_DEFINE(HAVE_PLIST_UNIX_DATE, 1, [Define if libplist has new unix date API (>= 2.7.0)])
+fi
+
+CFLAGS="$CACHED_CFLAGS"
 
 # Check for operating system
 AC_MSG_CHECKING([for platform-specific build settings])
@@ -93,6 +109,7 @@ case ${host_os} in
     AC_MSG_RESULT([${host_os}])
     win32=true
     AC_DEFINE(WINVER, 0x0501, [minimum Windows version])
+    deplibs_check_method='pass_all'
     ;;
   darwin*)
     AC_MSG_RESULT([${host_os}])
@@ -106,24 +123,6 @@ case ${host_os} in
 esac
 AM_CONDITIONAL(WIN32, test x$win32 = xtrue)
 AM_CONDITIONAL(DARWIN, test x$darwin = xtrue)
-
-# Check if the C compiler supports __attribute__((constructor))
-AC_CACHE_CHECK([wether the C compiler supports constructor/destructor attributes],
-  ac_cv_attribute_constructor, [
-  ac_cv_attribute_constructor=no
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
-    [[
-      static void __attribute__((constructor)) test_constructor(void) {
-      }
-      static void __attribute__((destructor)) test_destructor(void) {
-      }
-    ]], [])],
-    [ac_cv_attribute_constructor=yes]
-  )]
-)
-if test "$ac_cv_attribute_constructor" = "yes"; then
-  AC_DEFINE(HAVE_ATTRIBUTE_CONSTRUCTOR, 1, [Define if the C compiler supports constructor/destructor attributes])
-fi
 
 AC_CHECK_MEMBER(struct dirent.d_type, AC_DEFINE(HAVE_DIRENT_D_TYPE, 1, [define if struct dirent has member d_type]),, [#include <dirent.h>])
 
